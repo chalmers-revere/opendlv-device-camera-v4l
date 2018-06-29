@@ -1,0 +1,59 @@
+# Copyright (C) 2018  Christian Berger
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+# Part to build opendlv-device-camera-v4l.
+FROM alpine:3.7 as builder
+MAINTAINER Christian Berger "christian.berger@gu.se"
+RUN echo http://dl-4.alpinelinux.org/alpine/edge/main > /etc/apk/repositories && \
+    echo http://dl-4.alpinelinux.org/alpine/edge/community >> /etc/apk/repositories && \
+    echo http://dl-4.alpinelinux.org/alpine/edge/testing >> /etc/apk/repositories && \
+    apk update && \
+    apk --no-cache add \
+        coreutils \
+        cmake \
+        g++ \
+        yasm \
+        linux-headers \
+        libx11-dev \
+        make \
+        upx
+ADD . /opt/sources
+WORKDIR /opt/sources
+RUN wget https://github.com/FFmpeg/FFmpeg/archive/n4.0.tar.gz && \
+    tar xvzf n4.0.tar.gz && \
+    cd FFmpeg-n4.0 && \
+    ./configure --disable-everything --disable-zlib --disable-xlib --disable-lzma --disable-libxcb --disable-iconv --disable-avcodec --disable-avfilter --disable-avformat --disable-swresample --disable-avdevice --enable-swscale --disable-v4l2-m2m --disable-vaapi --disable-autodetect --disable-doc --enable-small --prefix=/usr && \
+    make -j2 && make install
+RUN mkdir build && \
+    cd build && \
+    cmake -D CMAKE_BUILD_TYPE=Release -D CMAKE_INSTALL_PREFIX=/tmp .. && \
+    make && make install && upx -9 /tmp/bin/opendlv-device-camera-v4l
+
+# Part to deploy opendlv-device-camera-v4l.
+FROM alpine:3.7
+MAINTAINER Christian Berger "christian.berger@gu.se"
+
+RUN echo http://dl-4.alpinelinux.org/alpine/edge/main > /etc/apk/repositories && \
+    echo http://dl-4.alpinelinux.org/alpine/edge/community >> /etc/apk/repositories && \
+    echo http://dl-4.alpinelinux.org/alpine/edge/testing >> /etc/apk/repositories && \
+    apk update && \
+    apk --no-cache add \
+        libx11
+
+WORKDIR /usr/bin
+COPY --from=builder /tmp/bin/opendlv-device-camera-v4l .
+ENV NO_AT_BRIDGE=1
+ENTRYPOINT ["/usr/bin/opendlv-device-camera-v4l"]
+
