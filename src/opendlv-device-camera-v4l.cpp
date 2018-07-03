@@ -274,8 +274,10 @@ int32_t main(int32_t argc, char **argv) {
         cluon::OD4Session od4{static_cast<uint16_t>(std::stoi(commandlineArguments["cid"]))};
 
         std::unique_ptr<cluon::SharedMemory> sharedMemory(new cluon::SharedMemory{NAME, SIZE});
-        if (sharedMemory && sharedMemory->valid()) {
-            std::clog << argv[0] << ": Data from camera '" << commandlineArguments["camera"]<< "' available in shared memory '" << sharedMemory->name() << "' (" << sharedMemory->size() << ")." << std::endl;
+        std::unique_ptr<cluon::SharedMemory> sharedMemory2(new cluon::SharedMemory{NAME+"2", WIDTH*2*HEIGHT});
+        if ( (sharedMemory && sharedMemory->valid()) &&
+             (sharedMemory2 && sharedMemory2->valid()) ) {
+            std::clog << argv[0] << ": Data from camera '" << commandlineArguments["camera"]<< "' available in shared memory '" << sharedMemory->name() << "' (" << sharedMemory->size() << ") and " << sharedMemory2->name() << "' (" << sharedMemory2->size() << ")." << std::endl;
 
             // Define timeout for select system call.
             struct timeval timeout {};
@@ -344,6 +346,15 @@ int32_t main(int32_t argc, char **argv) {
                     unsigned char *bufferStart = (unsigned char *) buffers[bufferIndex].buf;
 
                     if (0 < bufferSize) {
+
+// Copy raw YUYV422 data.
+{
+    sharedMemory2->lock();
+    memcpy(sharedMemory2->data(), bufferStart, WIDTH * 2 * HEIGHT);
+    sharedMemory2->unlock();
+    sharedMemory2->notifyAll();
+}
+
                         sharedMemory->lock();
 
                         if (isMJPEG) {
@@ -360,6 +371,7 @@ int32_t main(int32_t argc, char **argv) {
                             uint8_t *dst = reinterpret_cast<uint8_t*>(sharedMemory->data());
                             sws_scale(yuv2rgbContext, inData, inLinesize, 0, HEIGHT, &dst, outLinesize);
 
+#if 0
 {
     sws_scale(convertContext, inData, inLinesize, 0, HEIGHT, picture_in.img.plane, picture_in.img.i_stride);
 
@@ -377,19 +389,20 @@ int32_t main(int32_t argc, char **argv) {
             fout.close();
         }
         else {
-            opendlv::proxy::ImageReading ir;
-            ir.format("h264");
-            ir.width(WIDTH);
-            ir.height(HEIGHT);
-            const std::string d(reinterpret_cast<char*>(nals->p_payload), frameSize);
-            ir.data(d);
-            od4.send(ir);
+//            opendlv::proxy::ImageReading ir;
+//            ir.format("h264");
+//            ir.width(WIDTH);
+//            ir.height(HEIGHT);
+//            const std::string d(reinterpret_cast<char*>(nals->p_payload), frameSize);
+//            ir.data(d);
+//            od4.send(ir);
 //            std::cout.write(reinterpret_cast<char*>(nals->p_payload), frameSize);
 //            std::cout.flush();
         }
         i_frame++;
     }
 }
+#endif
                         }
 
                         if (VERBOSE && (isMJPEG || isYUYV422)) {
