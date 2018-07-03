@@ -44,6 +44,7 @@
 
 extern "C" {
     #include <libswscale/swscale.h>
+    #include <x264.h>
 }
 
 #include <atomic>
@@ -74,13 +75,14 @@ int32_t main(int32_t argc, char **argv) {
     if ( (0 == commandlineArguments.count("camera")) || (0 == commandlineArguments.count("cid")) || (0 == commandlineArguments.count("width")) || (0 == commandlineArguments.count("height")) || (0 == commandlineArguments.count("bpp")) || (0 == commandlineArguments.count("freq")) ) {
         std::cerr << argv[0] << " interfaces with the given V4L camera (e.g., /dev/video0) and publishes it to a running OpenDaVINCI session using the OpenDLV Standard Message Set." << std::endl;
         std::cerr << "Usage:   " << argv[0] << " --camera=<V4L dev node> --cid=<OpenDaVINCI session> --width=<width> --height=<height> --bpp=<bits per pixel> [--name=<unique name for the associated shared memory>] [--id=<Identifier in case of multiple cameras>] [--verbose]" << std::endl;
-        std::cerr << "         --freq:    desired bits per pixel of a frame (must be either 8 or 24)" << std::endl;
+        std::cerr << "         --freq:    desired frame rate" << std::endl;
         std::cerr << "         --width:   desired width of a frame" << std::endl;
         std::cerr << "         --height:  desired height of a frame" << std::endl;
         std::cerr << "         --bpp:     desired bits per pixel of a frame (must be either 8 or 24)" << std::endl;
         std::cerr << "         --bgr2rgb: convert BGR to RGB" << std::endl;
         std::cerr << "         --name:    when omitted, '/cam0' is chosen" << std::endl;
         std::cerr << "         --verbose: when set, the raw image is displayed" << std::endl;
+        std::cerr << "         --stdout:  dump to stdout" << std::endl;
         std::cerr << "Example: " << argv[0] << " --cid=111 --camera=/dev/video0 --name=cam0" << std::endl;
         retCode = 1;
     }
@@ -104,6 +106,7 @@ int32_t main(int32_t argc, char **argv) {
         (void)ID;
         const bool VERBOSE{commandlineArguments.count("verbose") != 0};
         const bool BGR2RGB{commandlineArguments.count("bgr2rgb") != 0};
+        const bool STDOUT{commandlineArguments.count("stdout") != 0};
 
 
         int videoDevice = open(commandlineArguments["camera"].c_str(), O_RDWR);
@@ -240,6 +243,33 @@ int32_t main(int32_t argc, char **argv) {
         }
 
 
+        x264_param_t parameters;
+        x264_picture_t picture_in, picture_out;
+        x264_t* encoder;
+
+        x264_param_default_preset(&parameters, "veryfast", "zerolatency");
+        parameters.i_log_level = X264_LOG_INFO;
+        parameters.i_threads = 1;
+        parameters.i_bitdepth = 8;
+        parameters.i_keyint_min = 10;
+        parameters.i_keyint_max = 10;
+        parameters.i_csp = X264_CSP_I420;
+        parameters.i_width  = WIDTH;
+        parameters.i_height = HEIGHT;
+        parameters.i_fps_num = static_cast<uint32_t>(FREQ);
+        parameters.b_vfr_input = 0;
+        parameters.b_repeat_headers = 1;
+        parameters.b_annexb = 1;
+        x264_param_apply_profile(&parameters, "baseline");
+
+        encoder = x264_encoder_open(&parameters);
+        x264_picture_alloc(&picture_in, X264_CSP_I420, parameters.i_width, parameters.i_height);
+        picture_in.i_type = X264_TYPE_AUTO;
+        picture_in.img.i_csp = X264_CSP_I420;
+
+        SwsContext* convertContext = sws_getContext(parameters.i_width, parameters.i_height, AV_PIX_FMT_YUYV422, parameters.i_width, parameters.i_height, AV_PIX_FMT_YUV420P, SWS_FAST_BILINEAR, 0, 0, 0);
+
+
         // Interface to a running OpenDaVINCI session (ignoring any incoming Envelopes).
         cluon::OD4Session od4{static_cast<uint16_t>(std::stoi(commandlineArguments["cid"]))};
 
@@ -286,6 +316,8 @@ int32_t main(int32_t argc, char **argv) {
                 XMapWindow(display, window);
             }
 
+            int i_frame{0};
+
             while (od4.isRunning()) {
                 timeout.tv_sec  = 1;
                 timeout.tv_usec = 0;
@@ -327,6 +359,37 @@ int32_t main(int32_t argc, char **argv) {
                             int outLinesize[1] = { static_cast<int>(WIDTH * BPP/8 /* RGB is 3 pixels */) };
                             uint8_t *dst = reinterpret_cast<uint8_t*>(sharedMemory->data());
                             sws_scale(yuv2rgbContext, inData, inLinesize, 0, HEIGHT, &dst, outLinesize);
+
+{
+    sws_scale(convertContext, inData, inLinesize, 0, HEIGHT, picture_in.img.plane, picture_in.img.i_stride);
+
+    x264_nal_t* nals;
+    int i_nals = 0;
+    picture_in.i_pts = i_frame;
+    int frameSize = x264_encoder_encode(encoder, &nals, &i_nals, &picture_in, &picture_out);
+    if (frameSize > 0) {
+        if (!STDOUT) {
+            std::stringstream filename;
+            filename << "frame" << std::setw(4) << std::setfill('0') << i_frame << ".h264";
+
+            std::fstream fout(filename.str().c_str(), std::ios::out|std::ios::binary);
+            fout.write(reinterpret_cast<char*>(nals->p_payload), frameSize);
+            fout.close();
+        }
+        else {
+            opendlv::proxy::ImageReading ir;
+            ir.format("h264");
+            ir.width(WIDTH);
+            ir.height(HEIGHT);
+            const std::string d(reinterpret_cast<char*>(nals->p_payload), frameSize);
+            ir.data(d);
+            od4.send(ir);
+//            std::cout.write(reinterpret_cast<char*>(nals->p_payload), frameSize);
+//            std::cout.flush();
+        }
+        i_frame++;
+    }
+}
                         }
 
                         if (VERBOSE && (isMJPEG || isYUYV422)) {
@@ -373,6 +436,9 @@ int32_t main(int32_t argc, char **argv) {
         }
 
         ::close(videoDevice);
+
+        x264_encoder_close(encoder);
+        sws_freeContext(convertContext);
     }
     return retCode;
 }
