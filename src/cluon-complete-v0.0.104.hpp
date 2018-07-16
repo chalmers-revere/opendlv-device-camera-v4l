@@ -1,6 +1,6 @@
 // This is an auto-generated header-only single-file distribution of libcluon.
-// Date: Mon, 25 Jun 2018 16:13:25 +0200
-// Version: 0.0.102
+// Date: Mon, 16 Jul 2018 21:38:22 +0200
+// Version: 0.0.104
 //
 //
 // Implementation of N4562 std::experimental::any (merged into C++17) for C++11 compilers.
@@ -466,7 +466,7 @@ namespace std
 //
 //  peglib.h
 //
-//  Copyright (c) 2015-17 Yuji Hirose. All rights reserved.
+//  Copyright (c) 2015-18 Yuji Hirose. All rights reserved.
 //  MIT License
 //
 
@@ -930,11 +930,6 @@ private:
 };
 
 /*
- * Match action
- */
-typedef std::function<void (const char* s, size_t n, size_t id, const std::string& name)> MatchAction;
-
-/*
  * Result
  */
 inline bool success(size_t len) {
@@ -948,8 +943,8 @@ inline bool fail(size_t len) {
 /*
  * Context
  */
-class Ope;
 class Context;
+class Ope;
 class Definition;
 
 typedef std::function<void (const char* name, const char* s, size_t n, const SemanticValues& sv, const Context& c, const any& dt)> Tracer;
@@ -975,6 +970,10 @@ public:
     std::shared_ptr<Ope>                         whitespaceOpe;
     bool                                         in_whitespace;
 
+    std::shared_ptr<Ope>                         wordOpe;
+
+    std::unordered_map<std::string, std::string> captures;
+
     const size_t                                 def_count;
     const bool                                   enablePackratParsing;
     std::vector<bool>                            cache_registered;
@@ -990,6 +989,7 @@ public:
         size_t               a_l,
         size_t               a_def_count,
         std::shared_ptr<Ope> a_whitespaceOpe,
+        std::shared_ptr<Ope> a_wordOpe,
         bool                 a_enablePackratParsing,
         Tracer               a_tracer)
         : path(a_path)
@@ -1002,6 +1002,7 @@ public:
         , in_token(false)
         , whitespaceOpe(a_whitespaceOpe)
         , in_whitespace(false)
+        , wordOpe(a_wordOpe)
         , def_count(a_def_count)
         , enablePackratParsing(a_enablePackratParsing)
         , cache_registered(enablePackratParsing ? def_count * (l + 1) : 0)
@@ -1360,13 +1361,19 @@ public:
 class LiteralString : public Ope
 {
 public:
-    LiteralString(const std::string& s) : lit_(s) {}
+    LiteralString(const std::string& s)
+        : lit_(s)
+        , init_is_word_(false)
+        , is_word_(false)
+        {}
 
     size_t parse(const char* s, size_t n, SemanticValues& sv, Context& c, any& dt) const override;
 
     void accept(Visitor& v) override;
 
     std::string lit_;
+	mutable bool init_is_word_;
+	mutable bool is_word_;
 };
 
 class CharacterClass : public Ope
@@ -1444,14 +1451,16 @@ public:
 class Capture : public Ope
 {
 public:
-    Capture(const std::shared_ptr<Ope>& ope, MatchAction ma, size_t id, const std::string& name)
-        : ope_(ope), match_action_(ma), id_(id), name_(name) {}
+    typedef std::function<void (const char* s, size_t n, Context& c)> MatchAction;
+
+    Capture(const std::shared_ptr<Ope>& ope, MatchAction ma)
+        : ope_(ope), match_action_(ma) {}
 
     size_t parse(const char* s, size_t n, SemanticValues& sv, Context& c, any& dt) const override {
         const auto& rule = *ope_;
         auto len = rule.parse(s, n, sv, c, dt);
         if (success(len) && match_action_) {
-            match_action_(s, len, id_, name_);
+            match_action_(s, len, c);
         }
         return len;
     }
@@ -1461,9 +1470,7 @@ public:
     std::shared_ptr<Ope> ope_;
 
 private:
-    MatchAction          match_action_;
-    size_t               id_;
-    std::string          name_;
+    MatchAction match_action_;
 };
 
 class TokenBoundary : public Ope
@@ -1578,6 +1585,18 @@ public:
     std::shared_ptr<Ope> ope_;
 };
 
+class BackReference : public Ope
+{
+public:
+    BackReference(const std::string& name) : name_(name) {}
+
+    size_t parse(const char* s, size_t n, SemanticValues& sv, Context& c, any& dt) const override;
+
+    void accept(Visitor& v) override;
+
+    std::string name_;
+};
+
 /*
  * Visitor
  */
@@ -1602,6 +1621,7 @@ struct Ope::Visitor
     virtual void visit(Holder& /*ope*/) {}
     virtual void visit(DefinitionReference& /*ope*/) {}
     virtual void visit(Whitespace& /*ope*/) {}
+    virtual void visit(BackReference& /*ope*/) {}
 };
 
 struct AssignIDToDefinition : public Ope::Visitor
@@ -1667,6 +1687,7 @@ struct IsToken : public Ope::Visitor
 };
 
 static const char* WHITESPACE_DEFINITION_NAME = "%whitespace";
+static const char* WORD_DEFINITION_NAME = "%word";
 
 /*
  * Definition
@@ -1704,6 +1725,7 @@ public:
         : name(std::move(rhs.name))
         , ignoreSemanticValue(rhs.ignoreSemanticValue)
         , whitespaceOpe(rhs.whitespaceOpe)
+        , wordOpe(rhs.wordOpe)
         , enablePackratParsing(rhs.enablePackratParsing)
         , is_token(rhs.is_token)
         , has_token_boundary(rhs.has_token_boundary)
@@ -1823,6 +1845,7 @@ public:
     std::function<std::string ()>  error_message;
     bool                           ignoreSemanticValue;
     std::shared_ptr<Ope>           whitespaceOpe;
+    std::shared_ptr<Ope>           wordOpe;
     bool                           enablePackratParsing;
     bool                           is_token;
     bool                           has_token_boundary;
@@ -1843,7 +1866,7 @@ private:
             ope = std::make_shared<Sequence>(whitespaceOpe, ope);
         }
 
-        Context cxt(path, s, n, assignId.ids.size(), whitespaceOpe, enablePackratParsing, tracer);
+        Context cxt(path, s, n, assignId.ids.size(), whitespaceOpe, wordOpe, enablePackratParsing, tracer);
         auto len = ope->parse(s, n, sv, cxt, dt);
         return Result{ success(len), len, cxt.error_pos, cxt.message_pos, cxt.message };
     }
@@ -1855,16 +1878,38 @@ private:
  * Implementations
  */
 
-inline size_t LiteralString::parse(const char* s, size_t n, SemanticValues& sv, Context& c, any& dt) const {
-    c.trace("LiteralString", s, n, sv, dt);
-
+inline size_t parse_literal(const char* s, size_t n, SemanticValues& sv, Context& c, any& dt,
+        const std::string& lit, bool& init_is_word, bool& is_word)
+{
     size_t i = 0;
-    for (; i < lit_.size(); i++) {
-        if (i >= n || s[i] != lit_[i]) {
+    for (; i < lit.size(); i++) {
+        if (i >= n || s[i] != lit[i]) {
             c.set_error_pos(s);
             return static_cast<size_t>(-1);
         }
     }
+
+	// Word check
+    static Context dummy_c(nullptr, lit.data(), lit.size(), 0, nullptr, nullptr, false, nullptr);
+    static SemanticValues dummy_sv;
+    static any dummy_dt;
+
+    if (!init_is_word) { // TODO: Protect with mutex
+		if (c.wordOpe) {
+			auto len = c.wordOpe->parse(lit.data(), lit.size(), dummy_sv, dummy_c, dummy_dt);
+			is_word = success(len);
+		}
+        init_is_word = true;
+    }
+
+	if (is_word) {
+        auto ope = std::make_shared<NotPredicate>(c.wordOpe);
+		auto len = ope->parse(s + i, n - i, dummy_sv, dummy_c, dummy_dt);
+		if (fail(len)) {
+            return static_cast<size_t>(-1);
+		}
+        i += len;
+	}
 
     // Skip whiltespace
     if (!c.in_token) {
@@ -1878,6 +1923,11 @@ inline size_t LiteralString::parse(const char* s, size_t n, SemanticValues& sv, 
     }
 
     return i;
+}
+
+inline size_t LiteralString::parse(const char* s, size_t n, SemanticValues& sv, Context& c, any& dt) const {
+    c.trace("LiteralString", s, n, sv, dt);
+    return parse_literal(s, n, sv, c, dt, lit_, init_is_word_, is_word_);
 }
 
 inline size_t TokenBoundary::parse(const char* s, size_t n, SemanticValues& sv, Context& c, any& dt) const {
@@ -1990,6 +2040,17 @@ inline std::shared_ptr<Ope> DefinitionReference::get_rule() const {
     return rule_;
 }
 
+inline size_t BackReference::parse(const char* s, size_t n, SemanticValues& sv, Context& c, any& dt) const {
+    c.trace("BackReference", s, n, sv, dt);
+    if (c.captures.find(name_) == c.captures.end()) {
+        throw std::runtime_error("Invalid back reference...");
+    }
+    const auto& lit = c.captures[name_];
+    bool init_is_word = false;
+    bool is_word = false;
+    return parse_literal(s, n, sv, c, dt, lit, init_is_word, is_word);
+}
+
 inline void Sequence::accept(Visitor& v) { v.visit(*this); }
 inline void PrioritizedChoice::accept(Visitor& v) { v.visit(*this); }
 inline void ZeroOrMore::accept(Visitor& v) { v.visit(*this); }
@@ -2008,6 +2069,7 @@ inline void WeakHolder::accept(Visitor& v) { v.visit(*this); }
 inline void Holder::accept(Visitor& v) { v.visit(*this); }
 inline void DefinitionReference::accept(Visitor& v) { v.visit(*this); }
 inline void Whitespace::accept(Visitor& v) { v.visit(*this); }
+inline void BackReference::accept(Visitor& v) { v.visit(*this); }
 
 inline void AssignIDToDefinition::visit(Holder& ope) {
     auto p = static_cast<void*>(ope.outer_);
@@ -2069,12 +2131,8 @@ inline std::shared_ptr<Ope> dot() {
     return std::make_shared<AnyCharacter>();
 }
 
-inline std::shared_ptr<Ope> cap(const std::shared_ptr<Ope>& ope, MatchAction ma, size_t n, const std::string& s) {
-    return std::make_shared<Capture>(ope, ma, n, s);
-}
-
-inline std::shared_ptr<Ope> cap(const std::shared_ptr<Ope>& ope, MatchAction ma) {
-    return std::make_shared<Capture>(ope, ma, static_cast<size_t>(-1), std::string());
+inline std::shared_ptr<Ope> cap(const std::shared_ptr<Ope>& ope, Capture::MatchAction ma) {
+    return std::make_shared<Capture>(ope, ma);
 }
 
 inline std::shared_ptr<Ope> tok(const std::shared_ptr<Ope>& ope) {
@@ -2093,6 +2151,10 @@ inline std::shared_ptr<Ope> wsp(const std::shared_ptr<Ope>& ope) {
     return std::make_shared<Whitespace>(std::make_shared<Ignore>(ope));
 }
 
+inline std::shared_ptr<Ope> bkr(const std::string& name) {
+    return std::make_shared<BackReference>(name);
+}
+
 /*-----------------------------------------------------------------------------
  *  PEG parser generator
  *---------------------------------------------------------------------------*/
@@ -2107,10 +2169,9 @@ public:
         const char*  s,
         size_t       n,
         std::string& start,
-        MatchAction  ma,
         Log          log)
     {
-        return get_instance().perform_core(s, n, start, ma, log);
+        return get_instance().perform_core(s, n, start, log);
     }
 
     // For debuging purpose
@@ -2132,15 +2193,10 @@ private:
     struct Data {
         std::shared_ptr<Grammar>                         grammar;
         std::string                                      start;
-        MatchAction                                      match_action;
         std::vector<std::pair<std::string, const char*>> duplicates;
         std::unordered_map<std::string, const char*>     references;
-        size_t                                           capture_count;
 
-        Data()
-            : grammar(std::make_shared<Grammar>())
-            , capture_count(0)
-            {}
+        Data(): grammar(std::make_shared<Grammar>()) {}
     };
 
     struct DetectLeftRecursion : public Ope::Visitor {
@@ -2227,6 +2283,9 @@ private:
             }
             done_ = true;
         }
+        void visit(BackReference& /*ope*/) override {
+            done_ = true;
+        }
 
         const char* s_;
 
@@ -2249,7 +2308,7 @@ private:
                                seq(g["OPEN"], g["Expression"], g["CLOSE"]),
                                seq(g["BeginTok"], g["Expression"], g["EndTok"]),
                                seq(g["BeginCap"], g["Expression"], g["EndCap"]),
-                               g["Literal"], g["Class"], g["DOT"]);
+                               g["BackRef"], g["Literal"], g["Class"], g["DOT"]);
 
         g["Identifier"] <= seq(g["IdentCont"], g["Spacing"]);
         g["IdentCont"]  <= seq(g["IdentStart"], zom(g["IdentRest"]));
@@ -2292,8 +2351,10 @@ private:
         g["BeginTok"]   <= seq(chr('<'), g["Spacing"]);
         g["EndTok"]     <= seq(chr('>'), g["Spacing"]);
 
-        g["BeginCap"]   <= seq(chr('$'), tok(opt(g["Identifier"])), chr('<'), g["Spacing"]);
-        g["EndCap"]     <= seq(lit(">"), g["Spacing"]);
+        g["BeginCap"]   <= seq(chr('$'), tok(g["IdentCont"]), chr('<'), g["Spacing"]);
+        g["EndCap"]     <= seq(chr('>'), g["Spacing"]);
+
+        g["BackRef"]    <= seq(chr('$'), tok(g["IdentCont"]), g["Spacing"]);
 
         g["IGNORE"]     <= chr('~');
 
@@ -2388,7 +2449,7 @@ private:
             }
         };
 
-        g["Primary"] = [&](const SemanticValues& sv, any& dt) -> std::shared_ptr<Ope> {
+        g["Primary"] = [&](const SemanticValues& sv, any& dt) {
             Data& data = *dt.get<Data*>();
 
             switch (sv.choice()) {
@@ -2417,7 +2478,9 @@ private:
                 case 3: { // Capture
                     const auto& name = sv[0].get<std::string>();
                     auto ope = sv[1].get<std::shared_ptr<Ope>>();
-                    return cap(ope, data.match_action, ++data.capture_count, name);
+                    return cap(ope, [name](const char* a_s, size_t a_n, Context& c) {
+                        c.captures[name] = std::string(a_s, a_n);
+                    });
                 }
                 default: {
                     return sv[0].get<std::shared_ptr<Ope>>();
@@ -2447,18 +2510,19 @@ private:
         g["DOT"] = [](const SemanticValues& /*sv*/) { return dot(); };
 
         g["BeginCap"] = [](const SemanticValues& sv) { return sv.token(); };
+
+        g["BackRef"] = [&](const SemanticValues& sv) {
+            return bkr(sv.token());
+        };
     }
 
     std::shared_ptr<Grammar> perform_core(
         const char*  s,
         size_t       n,
         std::string& start,
-        MatchAction  ma,
         Log          log)
     {
         Data data;
-        data.match_action = ma;
-
         any dt = &data;
         auto r = g["Grammar"].parse(s, n, dt);
 
@@ -2535,6 +2599,12 @@ private:
         if (grammar.count(WHITESPACE_DEFINITION_NAME)) {
             auto& rule = (*data.grammar)[start];
             rule.whitespaceOpe = wsp((*data.grammar)[WHITESPACE_DEFINITION_NAME].get_core_operator());
+        }
+
+        // Word expression
+        if (grammar.count(WORD_DEFINITION_NAME)) {
+            auto& rule = (*data.grammar)[start];
+            rule.wordOpe = (*data.grammar)[WORD_DEFINITION_NAME].get_core_operator();
         }
 
         return data.grammar;
@@ -2801,14 +2871,7 @@ public:
     }
 
     bool load_grammar(const char* s, size_t n) {
-        grammar_ = ParserGenerator::parse(
-            s, n,
-            start_,
-            [&](const char* a_s, size_t a_n, size_t a_id, const std::string& a_name) {
-                if (match_action) match_action(a_s, a_n, a_id, a_name);
-            },
-            log);
-
+        grammar_ = ParserGenerator::parse(s, n, start_, log);
         return grammar_ != nullptr;
     }
 
@@ -2951,8 +3014,7 @@ public:
         }
     }
 
-    MatchAction match_action;
-    Log         log;
+    Log log;
 
 private:
     void output_log(const char* s, size_t n, const Definition::Result& r) const {
@@ -2974,256 +3036,6 @@ private:
 
     std::shared_ptr<Grammar> grammar_;
     std::string              start_;
-};
-
-/*-----------------------------------------------------------------------------
- *  Simple interface
- *---------------------------------------------------------------------------*/
-
-struct match
-{
-    struct Item {
-        const char* s;
-        size_t      n;
-        size_t      id;
-        std::string name;
-
-        size_t length() const { return n; }
-        std::string str() const { return std::string(s, n); }
-    };
-
-    std::vector<Item> matches;
-
-    typedef std::vector<Item>::iterator iterator;
-    typedef std::vector<Item>::const_iterator const_iterator;
-
-    bool empty() const {
-        return matches.empty();
-    }
-
-    size_t size() const {
-        return matches.size();
-    }
-
-    size_t length(size_t n = 0) {
-        return matches[n].length();
-    }
-
-    std::string str(size_t n = 0) const {
-        return matches[n].str();
-    }
-
-    const Item& operator[](size_t n) const {
-        return matches[n];
-    }
-
-    iterator begin() {
-        return matches.begin();
-    }
-
-    iterator end() {
-        return matches.end();
-    }
-
-    const_iterator begin() const {
-        return matches.cbegin();
-    }
-
-    const_iterator end() const {
-        return matches.cend();
-    }
-
-    std::vector<size_t> named_capture(const std::string& name) const {
-        std::vector<size_t> ret;
-        for (auto i = 0u; i < matches.size(); i++) {
-            if (matches[i].name == name) {
-                ret.push_back(i);
-            }
-        }
-        return ret;
-    }
-
-    std::map<std::string, std::vector<size_t>> named_captures() const {
-        std::map<std::string, std::vector<size_t>> ret;
-        for (auto i = 0u; i < matches.size(); i++) {
-            ret[matches[i].name].push_back(i);
-        }
-        return ret;
-    }
-
-    std::vector<size_t> indexed_capture(size_t id) const {
-        std::vector<size_t> ret;
-        for (auto i = 0u; i < matches.size(); i++) {
-            if (matches[i].id == id) {
-                ret.push_back(i);
-            }
-        }
-        return ret;
-    }
-
-    std::map<size_t, std::vector<size_t>> indexed_captures() const {
-        std::map<size_t, std::vector<size_t>> ret;
-        for (auto i = 0u; i < matches.size(); i++) {
-            ret[matches[i].id].push_back(i);
-        }
-        return ret;
-    }
-};
-
-inline bool peg_match(const char* syntax, const char* s, match& m) {
-    m.matches.clear();
-
-    parser pg(syntax);
-    pg.match_action = [&](const char* a_s, size_t a_n, size_t a_id, const std::string& a_name) {
-        m.matches.push_back(match::Item{ a_s, a_n, a_id, a_name });
-    };
-
-    auto ret = pg.parse(s);
-    if (ret) {
-        auto n = strlen(s);
-        m.matches.insert(m.matches.begin(), match::Item{ s, n, 0, std::string() });
-    }
-
-    return ret;
-}
-
-inline bool peg_match(const char* syntax, const char* s) {
-    parser parser(syntax);
-    return parser.parse(s);
-}
-
-inline bool peg_search(parser& pg, const char* s, size_t n, match& m) {
-    m.matches.clear();
-
-    pg.match_action = [&](const char* a_s, size_t a_n, size_t a_id, const std::string& a_name) {
-        m.matches.push_back(match::Item{ a_s, a_n, a_id, a_name });
-    };
-
-    size_t mpos, mlen;
-    auto ret = pg.search(s, n, mpos, mlen);
-    if (ret) {
-        m.matches.insert(m.matches.begin(), match::Item{ s + mpos, mlen, 0, std::string() });
-        return true;
-    }
-
-    return false;
-}
-
-inline bool peg_search(parser& pg, const char* s, match& m) {
-    auto n = strlen(s);
-    return peg_search(pg, s, n, m);
-}
-
-inline bool peg_search(const char* syntax, const char* s, size_t n, match& m) {
-    parser pg(syntax);
-    return peg_search(pg, s, n, m);
-}
-
-inline bool peg_search(const char* syntax, const char* s, match& m) {
-    parser pg(syntax);
-    auto n = strlen(s);
-    return peg_search(pg, s, n, m);
-}
-
-class peg_token_iterator : public std::iterator<std::forward_iterator_tag, match>
-{
-public:
-    peg_token_iterator()
-        : s_(nullptr)
-        , l_(0)
-        , pos_((std::numeric_limits<size_t>::max)()) {}
-
-    peg_token_iterator(const char* syntax, const char* s)
-        : peg_(syntax)
-        , s_(s)
-        , l_(strlen(s))
-        , pos_(0) {
-        peg_.match_action = [&](const char* a_s, size_t a_n, size_t a_id, const std::string& a_name) {
-            m_.matches.push_back(match::Item{ a_s, a_n, a_id, a_name });
-        };
-        search();
-    }
-
-    peg_token_iterator(const peg_token_iterator& rhs)
-        : peg_(rhs.peg_)
-        , s_(rhs.s_)
-        , l_(rhs.l_)
-        , pos_(rhs.pos_)
-        , m_(rhs.m_) {}
-
-    peg_token_iterator& operator++() {
-        search();
-        return *this;
-    }
-
-    peg_token_iterator operator++(int) {
-        auto it = *this;
-        search();
-        return it;
-    }
-
-    match& operator*() {
-        return m_;
-    }
-
-    match* operator->() {
-        return &m_;
-    }
-
-    bool operator==(const peg_token_iterator& rhs) {
-        return pos_ == rhs.pos_;
-    }
-
-    bool operator!=(const peg_token_iterator& rhs) {
-        return pos_ != rhs.pos_;
-    }
-
-private:
-    void search() {
-        m_.matches.clear();
-        size_t mpos, mlen;
-        if (peg_.search(s_ + pos_, l_ - pos_, mpos, mlen)) {
-            m_.matches.insert(m_.matches.begin(), match::Item{ s_ + mpos, mlen, 0, std::string() });
-            pos_ += mpos + mlen;
-        } else {
-            pos_ = (std::numeric_limits<size_t>::max)();
-        }
-    }
-
-    parser      peg_;
-    const char* s_;
-    size_t      l_;
-    size_t      pos_;
-    match       m_;
-};
-
-struct peg_token_range {
-    typedef peg_token_iterator iterator;
-    typedef const peg_token_iterator const_iterator;
-
-    peg_token_range(const char* syntax, const char* s)
-        : beg_iter(peg_token_iterator(syntax, s))
-        , end_iter() {}
-
-    iterator begin() {
-        return beg_iter;
-    }
-
-    iterator end() {
-        return end_iter;
-    }
-
-    const_iterator cbegin() const {
-        return beg_iter;
-    }
-
-    const_iterator cend() const {
-        return end_iter;
-    }
-
-private:
-    peg_token_iterator beg_iter;
-    peg_token_iterator end_iter;
 };
 
 } // namespace peg
@@ -3737,28 +3549,51 @@ void doTripletForwardVisit(uint32_t fieldIdentifier, std::string &&typeName, std
 namespace cluon { namespace data {
 using namespace std::string_literals; // NOLINT
 class LIB_API TimeStamp {
+    private:
+        static constexpr const char* TheShortName = "TimeStamp";
+        static constexpr const char* TheLongName = "cluon.data.TimeStamp";
+
+    public:
+        inline static int32_t ID() {
+            return 12;
+        }
+        inline static const std::string ShortName() {
+            return TheShortName;
+        }
+        inline static const std::string LongName() {
+            return TheLongName;
+        }
+
     public:
         TimeStamp() = default;
         TimeStamp(const TimeStamp&) = default;
         TimeStamp& operator=(const TimeStamp&) = default;
-        TimeStamp(TimeStamp&&) = default; // NOLINT
-        TimeStamp& operator=(TimeStamp&&) = default; // NOLINT
+        TimeStamp(TimeStamp&&) = default;
+        TimeStamp& operator=(TimeStamp&&) = default;
         ~TimeStamp() = default;
 
     public:
-        static int32_t ID();
-        static const std::string ShortName();
-        static const std::string LongName();
         
-        TimeStamp& seconds(const int32_t &v) noexcept;
-        int32_t seconds() const noexcept;
+        inline TimeStamp& seconds(const int32_t &v) noexcept {
+            m_seconds = v;
+            return *this;
+        }
+        inline int32_t seconds() const noexcept {
+            return m_seconds;
+        }
         
-        TimeStamp& microseconds(const int32_t &v) noexcept;
-        int32_t microseconds() const noexcept;
+        inline TimeStamp& microseconds(const int32_t &v) noexcept {
+            m_microseconds = v;
+            return *this;
+        }
+        inline int32_t microseconds() const noexcept {
+            return m_microseconds;
+        }
         
 
+    public:
         template<class Visitor>
-        void accept(Visitor &visitor) {
+        inline void accept(Visitor &visitor) {
             visitor.preVisit(ID(), ShortName(), LongName());
             
             doVisit(1, std::move("int32_t"s), std::move("seconds"s), m_seconds, visitor);
@@ -3769,7 +3604,7 @@ class LIB_API TimeStamp {
         }
 
         template<class PreVisitor, class Visitor, class PostVisitor>
-        void accept(PreVisitor &&preVisit, Visitor &&visit, PostVisitor &&postVisit) {
+        inline void accept(PreVisitor &&preVisit, Visitor &&visit, PostVisitor &&postVisit) {
             (void)visit; // Prevent warnings from empty messages.
             std::forward<PreVisitor>(preVisit)(ID(), ShortName(), LongName());
             
@@ -3902,40 +3737,83 @@ void doTripletForwardVisit(uint32_t fieldIdentifier, std::string &&typeName, std
 namespace cluon { namespace data {
 using namespace std::string_literals; // NOLINT
 class LIB_API Envelope {
+    private:
+        static constexpr const char* TheShortName = "Envelope";
+        static constexpr const char* TheLongName = "cluon.data.Envelope";
+
+    public:
+        inline static int32_t ID() {
+            return 1;
+        }
+        inline static const std::string ShortName() {
+            return TheShortName;
+        }
+        inline static const std::string LongName() {
+            return TheLongName;
+        }
+
     public:
         Envelope() = default;
         Envelope(const Envelope&) = default;
         Envelope& operator=(const Envelope&) = default;
-        Envelope(Envelope&&) = default; // NOLINT
-        Envelope& operator=(Envelope&&) = default; // NOLINT
+        Envelope(Envelope&&) = default;
+        Envelope& operator=(Envelope&&) = default;
         ~Envelope() = default;
 
     public:
-        static int32_t ID();
-        static const std::string ShortName();
-        static const std::string LongName();
         
-        Envelope& dataType(const int32_t &v) noexcept;
-        int32_t dataType() const noexcept;
+        inline Envelope& dataType(const int32_t &v) noexcept {
+            m_dataType = v;
+            return *this;
+        }
+        inline int32_t dataType() const noexcept {
+            return m_dataType;
+        }
         
-        Envelope& serializedData(const std::string &v) noexcept;
-        std::string serializedData() const noexcept;
+        inline Envelope& serializedData(const std::string &v) noexcept {
+            m_serializedData = v;
+            return *this;
+        }
+        inline std::string serializedData() const noexcept {
+            return m_serializedData;
+        }
         
-        Envelope& sent(const cluon::data::TimeStamp &v) noexcept;
-        cluon::data::TimeStamp sent() const noexcept;
+        inline Envelope& sent(const cluon::data::TimeStamp &v) noexcept {
+            m_sent = v;
+            return *this;
+        }
+        inline cluon::data::TimeStamp sent() const noexcept {
+            return m_sent;
+        }
         
-        Envelope& received(const cluon::data::TimeStamp &v) noexcept;
-        cluon::data::TimeStamp received() const noexcept;
+        inline Envelope& received(const cluon::data::TimeStamp &v) noexcept {
+            m_received = v;
+            return *this;
+        }
+        inline cluon::data::TimeStamp received() const noexcept {
+            return m_received;
+        }
         
-        Envelope& sampleTimeStamp(const cluon::data::TimeStamp &v) noexcept;
-        cluon::data::TimeStamp sampleTimeStamp() const noexcept;
+        inline Envelope& sampleTimeStamp(const cluon::data::TimeStamp &v) noexcept {
+            m_sampleTimeStamp = v;
+            return *this;
+        }
+        inline cluon::data::TimeStamp sampleTimeStamp() const noexcept {
+            return m_sampleTimeStamp;
+        }
         
-        Envelope& senderStamp(const uint32_t &v) noexcept;
-        uint32_t senderStamp() const noexcept;
+        inline Envelope& senderStamp(const uint32_t &v) noexcept {
+            m_senderStamp = v;
+            return *this;
+        }
+        inline uint32_t senderStamp() const noexcept {
+            return m_senderStamp;
+        }
         
 
+    public:
         template<class Visitor>
-        void accept(Visitor &visitor) {
+        inline void accept(Visitor &visitor) {
             visitor.preVisit(ID(), ShortName(), LongName());
             
             doVisit(1, std::move("int32_t"s), std::move("dataType"s), m_dataType, visitor);
@@ -3954,7 +3832,7 @@ class LIB_API Envelope {
         }
 
         template<class PreVisitor, class Visitor, class PostVisitor>
-        void accept(PreVisitor &&preVisit, Visitor &&visit, PostVisitor &&postVisit) {
+        inline void accept(PreVisitor &&preVisit, Visitor &&visit, PostVisitor &&postVisit) {
             (void)visit; // Prevent warnings from empty messages.
             std::forward<PreVisitor>(preVisit)(ID(), ShortName(), LongName());
             
@@ -4103,28 +3981,51 @@ void doTripletForwardVisit(uint32_t fieldIdentifier, std::string &&typeName, std
 namespace cluon { namespace data {
 using namespace std::string_literals; // NOLINT
 class LIB_API PlayerCommand {
+    private:
+        static constexpr const char* TheShortName = "PlayerCommand";
+        static constexpr const char* TheLongName = "cluon.data.PlayerCommand";
+
+    public:
+        inline static int32_t ID() {
+            return 9;
+        }
+        inline static const std::string ShortName() {
+            return TheShortName;
+        }
+        inline static const std::string LongName() {
+            return TheLongName;
+        }
+
     public:
         PlayerCommand() = default;
         PlayerCommand(const PlayerCommand&) = default;
         PlayerCommand& operator=(const PlayerCommand&) = default;
-        PlayerCommand(PlayerCommand&&) = default; // NOLINT
-        PlayerCommand& operator=(PlayerCommand&&) = default; // NOLINT
+        PlayerCommand(PlayerCommand&&) = default;
+        PlayerCommand& operator=(PlayerCommand&&) = default;
         ~PlayerCommand() = default;
 
     public:
-        static int32_t ID();
-        static const std::string ShortName();
-        static const std::string LongName();
         
-        PlayerCommand& command(const uint8_t &v) noexcept;
-        uint8_t command() const noexcept;
+        inline PlayerCommand& command(const uint8_t &v) noexcept {
+            m_command = v;
+            return *this;
+        }
+        inline uint8_t command() const noexcept {
+            return m_command;
+        }
         
-        PlayerCommand& seekTo(const float &v) noexcept;
-        float seekTo() const noexcept;
+        inline PlayerCommand& seekTo(const float &v) noexcept {
+            m_seekTo = v;
+            return *this;
+        }
+        inline float seekTo() const noexcept {
+            return m_seekTo;
+        }
         
 
+    public:
         template<class Visitor>
-        void accept(Visitor &visitor) {
+        inline void accept(Visitor &visitor) {
             visitor.preVisit(ID(), ShortName(), LongName());
             
             doVisit(1, std::move("uint8_t"s), std::move("command"s), m_command, visitor);
@@ -4135,7 +4036,7 @@ class LIB_API PlayerCommand {
         }
 
         template<class PreVisitor, class Visitor, class PostVisitor>
-        void accept(PreVisitor &&preVisit, Visitor &&visit, PostVisitor &&postVisit) {
+        inline void accept(PreVisitor &&preVisit, Visitor &&visit, PostVisitor &&postVisit) {
             (void)visit; // Prevent warnings from empty messages.
             std::forward<PreVisitor>(preVisit)(ID(), ShortName(), LongName());
             
@@ -4268,31 +4169,59 @@ void doTripletForwardVisit(uint32_t fieldIdentifier, std::string &&typeName, std
 namespace cluon { namespace data {
 using namespace std::string_literals; // NOLINT
 class LIB_API PlayerStatus {
+    private:
+        static constexpr const char* TheShortName = "PlayerStatus";
+        static constexpr const char* TheLongName = "cluon.data.PlayerStatus";
+
+    public:
+        inline static int32_t ID() {
+            return 10;
+        }
+        inline static const std::string ShortName() {
+            return TheShortName;
+        }
+        inline static const std::string LongName() {
+            return TheLongName;
+        }
+
     public:
         PlayerStatus() = default;
         PlayerStatus(const PlayerStatus&) = default;
         PlayerStatus& operator=(const PlayerStatus&) = default;
-        PlayerStatus(PlayerStatus&&) = default; // NOLINT
-        PlayerStatus& operator=(PlayerStatus&&) = default; // NOLINT
+        PlayerStatus(PlayerStatus&&) = default;
+        PlayerStatus& operator=(PlayerStatus&&) = default;
         ~PlayerStatus() = default;
 
     public:
-        static int32_t ID();
-        static const std::string ShortName();
-        static const std::string LongName();
         
-        PlayerStatus& state(const uint8_t &v) noexcept;
-        uint8_t state() const noexcept;
+        inline PlayerStatus& state(const uint8_t &v) noexcept {
+            m_state = v;
+            return *this;
+        }
+        inline uint8_t state() const noexcept {
+            return m_state;
+        }
         
-        PlayerStatus& numberOfEntries(const uint32_t &v) noexcept;
-        uint32_t numberOfEntries() const noexcept;
+        inline PlayerStatus& numberOfEntries(const uint32_t &v) noexcept {
+            m_numberOfEntries = v;
+            return *this;
+        }
+        inline uint32_t numberOfEntries() const noexcept {
+            return m_numberOfEntries;
+        }
         
-        PlayerStatus& currentEntryForPlayback(const uint32_t &v) noexcept;
-        uint32_t currentEntryForPlayback() const noexcept;
+        inline PlayerStatus& currentEntryForPlayback(const uint32_t &v) noexcept {
+            m_currentEntryForPlayback = v;
+            return *this;
+        }
+        inline uint32_t currentEntryForPlayback() const noexcept {
+            return m_currentEntryForPlayback;
+        }
         
 
+    public:
         template<class Visitor>
-        void accept(Visitor &visitor) {
+        inline void accept(Visitor &visitor) {
             visitor.preVisit(ID(), ShortName(), LongName());
             
             doVisit(1, std::move("uint8_t"s), std::move("state"s), m_state, visitor);
@@ -4305,7 +4234,7 @@ class LIB_API PlayerStatus {
         }
 
         template<class PreVisitor, class Visitor, class PostVisitor>
-        void accept(PreVisitor &&preVisit, Visitor &&visit, PostVisitor &&postVisit) {
+        inline void accept(PreVisitor &&preVisit, Visitor &&visit, PostVisitor &&postVisit) {
             (void)visit; // Prevent warnings from empty messages.
             std::forward<PreVisitor>(preVisit)(ID(), ShortName(), LongName());
             
@@ -4339,8 +4268,6 @@ struct isTripletForwardVisitable<cluon::data::PlayerStatus> {
 };
 #endif
 
-#ifndef IMPLEMENTATIONS_FOR_MESSAGES
-#define IMPLEMENTATIONS_FOR_MESSAGES
 /*
  * MIT License
  *
@@ -6495,7 +6422,7 @@ class LIBCLUON_API FromJSONVisitor {
      * @param input to decode from base64
      * @return Decoded input.
      */
-    std::string decodeBase64(const std::string &input) const noexcept;
+    static std::string decodeBase64(const std::string &input) noexcept;
 
    private:
     std::map<std::string, FromJSONVisitor::JSONKeyValue> readKeyValues(std::string &input) noexcept;
@@ -6613,7 +6540,7 @@ class LIBCLUON_API ToJSONVisitor {
      * @param input to encode as base64
      * @return base64 encoded input.
      */
-    std::string encodeBase64(const std::string &input) const noexcept;
+    static std::string encodeBase64(const std::string &input) noexcept;
 
    private:
     bool m_withOuterCurlyBraces{true};
@@ -8466,187 +8393,6 @@ class LIBCLUON_API SharedMemory {
 #endif
 };
 } // namespace cluon
-
-#endif
-
-/*
- * THIS IS AN AUTO-GENERATED FILE. DO NOT MODIFY AS CHANGES MIGHT BE OVERWRITTEN!
- */
-namespace cluon { namespace data {
-
-inline int32_t TimeStamp::ID() {
-    return 12;
-}
-
-inline const std::string TimeStamp::ShortName() {
-    return "TimeStamp";
-}
-inline const std::string TimeStamp::LongName() {
-    return "cluon.data.TimeStamp";
-}
-
-inline TimeStamp& TimeStamp::seconds(const int32_t &v) noexcept {
-    m_seconds = v;
-    return *this;
-}
-inline int32_t TimeStamp::seconds() const noexcept {
-    return m_seconds;
-}
-
-inline TimeStamp& TimeStamp::microseconds(const int32_t &v) noexcept {
-    m_microseconds = v;
-    return *this;
-}
-inline int32_t TimeStamp::microseconds() const noexcept {
-    return m_microseconds;
-}
-
-}}
-
-
-/*
- * THIS IS AN AUTO-GENERATED FILE. DO NOT MODIFY AS CHANGES MIGHT BE OVERWRITTEN!
- */
-namespace cluon { namespace data {
-
-inline int32_t Envelope::ID() {
-    return 1;
-}
-
-inline const std::string Envelope::ShortName() {
-    return "Envelope";
-}
-inline const std::string Envelope::LongName() {
-    return "cluon.data.Envelope";
-}
-
-inline Envelope& Envelope::dataType(const int32_t &v) noexcept {
-    m_dataType = v;
-    return *this;
-}
-inline int32_t Envelope::dataType() const noexcept {
-    return m_dataType;
-}
-
-inline Envelope& Envelope::serializedData(const std::string &v) noexcept {
-    m_serializedData = v;
-    return *this;
-}
-inline std::string Envelope::serializedData() const noexcept {
-    return m_serializedData;
-}
-
-inline Envelope& Envelope::sent(const cluon::data::TimeStamp &v) noexcept {
-    m_sent = v;
-    return *this;
-}
-inline cluon::data::TimeStamp Envelope::sent() const noexcept {
-    return m_sent;
-}
-
-inline Envelope& Envelope::received(const cluon::data::TimeStamp &v) noexcept {
-    m_received = v;
-    return *this;
-}
-inline cluon::data::TimeStamp Envelope::received() const noexcept {
-    return m_received;
-}
-
-inline Envelope& Envelope::sampleTimeStamp(const cluon::data::TimeStamp &v) noexcept {
-    m_sampleTimeStamp = v;
-    return *this;
-}
-inline cluon::data::TimeStamp Envelope::sampleTimeStamp() const noexcept {
-    return m_sampleTimeStamp;
-}
-
-inline Envelope& Envelope::senderStamp(const uint32_t &v) noexcept {
-    m_senderStamp = v;
-    return *this;
-}
-inline uint32_t Envelope::senderStamp() const noexcept {
-    return m_senderStamp;
-}
-
-}}
-
-
-/*
- * THIS IS AN AUTO-GENERATED FILE. DO NOT MODIFY AS CHANGES MIGHT BE OVERWRITTEN!
- */
-namespace cluon { namespace data {
-
-inline int32_t PlayerCommand::ID() {
-    return 9;
-}
-
-inline const std::string PlayerCommand::ShortName() {
-    return "PlayerCommand";
-}
-inline const std::string PlayerCommand::LongName() {
-    return "cluon.data.PlayerCommand";
-}
-
-inline PlayerCommand& PlayerCommand::command(const uint8_t &v) noexcept {
-    m_command = v;
-    return *this;
-}
-inline uint8_t PlayerCommand::command() const noexcept {
-    return m_command;
-}
-
-inline PlayerCommand& PlayerCommand::seekTo(const float &v) noexcept {
-    m_seekTo = v;
-    return *this;
-}
-inline float PlayerCommand::seekTo() const noexcept {
-    return m_seekTo;
-}
-
-}}
-
-
-/*
- * THIS IS AN AUTO-GENERATED FILE. DO NOT MODIFY AS CHANGES MIGHT BE OVERWRITTEN!
- */
-namespace cluon { namespace data {
-
-inline int32_t PlayerStatus::ID() {
-    return 10;
-}
-
-inline const std::string PlayerStatus::ShortName() {
-    return "PlayerStatus";
-}
-inline const std::string PlayerStatus::LongName() {
-    return "cluon.data.PlayerStatus";
-}
-
-inline PlayerStatus& PlayerStatus::state(const uint8_t &v) noexcept {
-    m_state = v;
-    return *this;
-}
-inline uint8_t PlayerStatus::state() const noexcept {
-    return m_state;
-}
-
-inline PlayerStatus& PlayerStatus::numberOfEntries(const uint32_t &v) noexcept {
-    m_numberOfEntries = v;
-    return *this;
-}
-inline uint32_t PlayerStatus::numberOfEntries() const noexcept {
-    return m_numberOfEntries;
-}
-
-inline PlayerStatus& PlayerStatus::currentEntryForPlayback(const uint32_t &v) noexcept {
-    m_currentEntryForPlayback = v;
-    return *this;
-}
-inline uint32_t PlayerStatus::currentEntryForPlayback() const noexcept {
-    return m_currentEntryForPlayback;
-}
-
-}}
 
 #endif
 #ifndef BEGIN_HEADER_ONLY_IMPLEMENTATION
@@ -11640,7 +11386,7 @@ inline void FromJSONVisitor::decodeFrom(std::istream &in) noexcept {
     m_keyValues = readKeyValues(s);
 }
 
-inline std::string FromJSONVisitor::decodeBase64(const std::string &input) const noexcept {
+inline std::string FromJSONVisitor::decodeBase64(const std::string &input) noexcept {
     const std::string ALPHABET{"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"};
     uint8_t counter{0};
     std::array<char, 4> buffer;
@@ -11838,7 +11584,7 @@ inline void FromJSONVisitor::visit(uint32_t id, std::string &&typeName, std::str
     if (0 < m_keyValues.count(name)) {
         try {
             std::string tmp{linb::any_cast<std::string>(m_keyValues[name].m_value)};
-            v = decodeBase64(tmp);
+            v = FromJSONVisitor::decodeBase64(tmp);
         } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
         }
     }
@@ -12389,11 +12135,11 @@ inline void ToJSONVisitor::visit(uint32_t id, std::string &&typeName, std::strin
 inline void ToJSONVisitor::visit(uint32_t id, std::string &&typeName, std::string &&name, std::string &v) noexcept {
     (void)typeName;
     if ((0 == m_mask.count(id)) || m_mask[id]) {
-        m_buffer << '\"' << name << '\"' << ':' << '\"' << encodeBase64(v) << '\"' << ',' << '\n';
+        m_buffer << '\"' << name << '\"' << ':' << '\"' << ToJSONVisitor::encodeBase64(v) << '\"' << ',' << '\n';
     }
 }
 
-inline std::string ToJSONVisitor::encodeBase64(const std::string &input) const noexcept {
+inline std::string ToJSONVisitor::encodeBase64(const std::string &input) noexcept {
     std::string retVal;
 
     const std::string ALPHABET{"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"};
@@ -12447,6 +12193,7 @@ inline std::string ToJSONVisitor::encodeBase64(const std::string &input) const n
  */
 
 //#include "cluon/ToCSVVisitor.hpp"
+//#include "cluon/ToJSONVisitor.hpp"
 
 #include <iomanip>
 #include <sstream>
@@ -12622,7 +12369,7 @@ inline void ToCSVVisitor::visit(uint32_t id, std::string &&typeName, std::string
         if (m_fillHeader) {
             m_bufferHeader << m_prefix << (!m_prefix.empty() ? "." : "") << name << m_delimiter;
         }
-        m_bufferValues << '\"' << v << '\"' << m_delimiter;
+        m_bufferValues << '\"' << cluon::ToJSONVisitor::encodeBase64(v) << '\"' << m_delimiter;
     }
 }
 
@@ -16127,11 +15874,7 @@ class LIBCLUON_API MetaMessageToCPPTransformator {
     /**
      * @return Content of the C++ header.
      */
-    std::string contentHeader() noexcept;
-    /**
-     * @return Content of the C++ source.
-     */
-    std::string contentSource() noexcept;
+    std::string content() noexcept;
 
    private:
     kainjow::mustache::data m_dataToBeRendered{};
@@ -16335,25 +16078,43 @@ void doTripletForwardVisit(uint32_t fieldIdentifier, std::string &&typeName, std
 {{%NAMESPACE_OPENING%}}
 using namespace std::string_literals; // NOLINT
 class LIB_API {{%MESSAGE%}} {
+    private:
+        static constexpr const char* TheShortName = "{{%MESSAGE%}}";
+        static constexpr const char* TheLongName = "{{%COMPLETEPACKAGENAME%}}{{%MESSAGE%}}";
+
+    public:
+        inline static int32_t ID() {
+            return {{%IDENTIFIER%}};
+        }
+        inline static const std::string ShortName() {
+            return TheShortName;
+        }
+        inline static const std::string LongName() {
+            return TheLongName;
+        }
+
     public:
         {{%MESSAGE%}}() = default;
         {{%MESSAGE%}}(const {{%MESSAGE%}}&) = default;
         {{%MESSAGE%}}& operator=(const {{%MESSAGE%}}&) = default;
-        {{%MESSAGE%}}({{%MESSAGE%}}&&) = default; // NOLINT
-        {{%MESSAGE%}}& operator=({{%MESSAGE%}}&&) = default; // NOLINT
+        {{%MESSAGE%}}({{%MESSAGE%}}&&) = default;
+        {{%MESSAGE%}}& operator=({{%MESSAGE%}}&&) = default;
         ~{{%MESSAGE%}}() = default;
 
     public:
-        static int32_t ID();
-        static const std::string ShortName();
-        static const std::string LongName();
         {{#%FIELDS%}}
-        {{%MESSAGE%}}& {{%NAME%}}(const {{%TYPE%}} &v) noexcept;
-        {{%TYPE%}} {{%NAME%}}() const noexcept;
+        inline {{%MESSAGE%}}& {{%NAME%}}(const {{%TYPE%}} &v) noexcept {
+            m_{{%NAME%}} = v;
+            return *this;
+        }
+        inline {{%TYPE%}} {{%NAME%}}() const noexcept {
+            return m_{{%NAME%}};
+        }
         {{/%FIELDS%}}
 
+    public:
         template<class Visitor>
-        void accept(Visitor &visitor) {
+        inline void accept(Visitor &visitor) {
             visitor.preVisit(ID(), ShortName(), LongName());
             {{#%FIELDS%}}
             doVisit({{%FIELDIDENTIFIER%}}, std::move("{{%TYPE%}}"s), std::move("{{%NAME%}}"s), m_{{%NAME%}}, visitor);
@@ -16362,7 +16123,7 @@ class LIB_API {{%MESSAGE%}} {
         }
 
         template<class PreVisitor, class Visitor, class PostVisitor>
-        void accept(PreVisitor &&preVisit, Visitor &&visit, PostVisitor &&postVisit) {
+        inline void accept(PreVisitor &&preVisit, Visitor &&visit, PostVisitor &&postVisit) {
             (void)visit; // Prevent warnings from empty messages.
             std::forward<PreVisitor>(preVisit)(ID(), ShortName(), LongName());
             {{#%FIELDS%}}
@@ -16389,50 +16150,11 @@ struct isTripletForwardVisitable<{{%COMPLETEPACKAGENAME_WITH_COLON_SEPARATORS%}}
 #endif
 )";
 
-const char *sourceFileTemplate = R"(
-/*
- * THIS IS AN AUTO-GENERATED FILE. DO NOT MODIFY AS CHANGES MIGHT BE OVERWRITTEN!
- */
-{{%NAMESPACE_OPENING%}}
-
-int32_t {{%MESSAGE%}}::ID() {
-    return {{%IDENTIFIER%}};
-}
-
-const std::string {{%MESSAGE%}}::ShortName() {
-    return "{{%MESSAGE%}}";
-}
-const std::string {{%MESSAGE%}}::LongName() {
-    return "{{%COMPLETEPACKAGENAME%}}{{%MESSAGE%}}";
-}
-{{#%FIELDS%}}
-{{%MESSAGE%}}& {{%MESSAGE%}}::{{%NAME%}}(const {{%TYPE%}} &v) noexcept {
-    m_{{%NAME%}} = v;
-    return *this;
-}
-{{%TYPE%}} {{%MESSAGE%}}::{{%NAME%}}() const noexcept {
-    return m_{{%NAME%}};
-}
-{{/%FIELDS%}}
-{{%NAMESPACE_CLOSING%}}
-)";
-
-std::string MetaMessageToCPPTransformator::contentHeader() noexcept {
+std::string MetaMessageToCPPTransformator::content() noexcept {
     m_dataToBeRendered.set("%FIELDS%", m_fields);
 
     kainjow::mustache::mustache tmpl{headerFileTemplate};
     // Reset Mustache's default string-escaper.
-    tmpl.set_custom_escape([](const std::string &s) { return s; });
-    std::stringstream sstr;
-    sstr << tmpl.render(m_dataToBeRendered);
-    const std::string str(sstr.str());
-    return str;
-}
-
-std::string MetaMessageToCPPTransformator::contentSource() noexcept {
-    m_dataToBeRendered.set("%FIELDS%", m_fields);
-
-    kainjow::mustache::mustache tmpl{sourceFileTemplate};
     tmpl.set_custom_escape([](const std::string &s) { return s; });
     std::stringstream sstr;
     sstr << tmpl.render(m_dataToBeRendered);
@@ -16707,25 +16429,18 @@ inline int32_t cluon_msc(int32_t argc, char **argv) {
     if (std::string::npos != inputFilename.find(PROGRAM)) {
         std::cerr << PROGRAM
                   << " transforms a given message specification file in .odvd format into C++." << std::endl;
-        std::cerr << "Usage:   " << PROGRAM << " [--cpp-headers] [--cpp-sources] [--cpp-add-include-file=<string>] [--proto] [--out=<file>] <odvd file>" << std::endl;
-        std::cerr << "         " << PROGRAM << " --cpp-headers <odvd file>" << std::endl;
-        std::cerr << "         " << PROGRAM << " --cpp-sources <odvd file>" << std::endl;
-        std::cerr << "         " << PROGRAM << " --cpp-headers --out=<target file> <odvd file>" << std::endl;
-        std::cerr << "         " << PROGRAM << " --cpp-sources --cpp-add-include-file=dir/file.hpp --out=<target file> <odvd file>" << std::endl;
-        std::cerr << "         " << PROGRAM << " --proto <odvd file>" << std::endl;
+        std::cerr << "Usage:   " << PROGRAM << " [--cpp] [--proto] [--out=<file>] <odvd file>" << std::endl;
+        std::cerr << "         " << PROGRAM << " --cpp:   Generate C++14-compliant, self-contained header file." << std::endl;
+        std::cerr << "         " << PROGRAM << " --proto: Generate Proto version2-compliant file." << std::endl;
         std::cerr << std::endl;
-        std::cerr << "Example: " << PROGRAM << " --cpp-headers --out=/tmp/myOutput.hpp myFile.odvd" << std::endl;
+        std::cerr << "Example: " << PROGRAM << " --cpp --out=/tmp/myOutput.hpp myFile.odvd" << std::endl;
         return 1;
     }
 
     std::string outputFilename;
     commandline({"--out"}) >> outputFilename;
 
-    std::string CPPincludeFile;
-    commandline({"--cpp-add-include-file"}) >> CPPincludeFile;
-
-    const bool generateCPPHeaders = commandline[{"--cpp-headers"}];
-    const bool generateCPPSources = commandline[{"--cpp-sources"}];
+    const bool generateCPP = commandline[{"--cpp"}];
     const bool generateProto = commandline[{"--proto"}];
 
     int retVal = 1;
@@ -16745,20 +16460,10 @@ inline int32_t cluon_msc(int32_t argc, char **argv) {
         }
         for (auto e : result.first) {
             std::string content;
-            if (generateCPPHeaders || generateCPPSources) {
+            if (generateCPP) {
                 cluon::MetaMessageToCPPTransformator transformation;
                 e.accept([&trans = transformation](const cluon::MetaMessage &_mm){ trans.visit(_mm); });
-                std::stringstream sstr;
-                if (!CPPincludeFile.empty()) {
-                    sstr << "#include <" << CPPincludeFile << ">" << std::endl;
-                }
-                if (generateCPPHeaders) {
-                    sstr << transformation.contentHeader();
-                }
-                if (generateCPPSources) {
-                    sstr << transformation.contentSource();
-                }
-                content = sstr.str();
+                content = transformation.content();
             }
             if (generateProto) {
                 cluon::MetaMessageToProtoTransformator transformation;
@@ -16962,6 +16667,7 @@ inline int32_t cluon_replay(int32_t argc, char **argv) {
             }
 
             bool play = true;
+            bool step = false;
             while ( (player.hasMoreData() || keepRunning) ) {
                 // Stop execution in case of a running OD4Session.
                 if (od4 && !od4->isRunning()) {
@@ -16999,18 +16705,24 @@ inline int32_t cluon_replay(int32_t argc, char **argv) {
                     std::lock_guard<std::mutex> lck(playerCommandMutex);
                     if ( (playerCommand.command() == 1) || (playerCommand.command() == 2) ) {
                         play = !(2 == playerCommand.command()); // LCOV_EXCL_LINE
+                        std::clog << PROGRAM << ": Change state: " << +playerCommand.command() << ", play = " << play << std::endl;
                     }
-
-                    std::clog << PROGRAM << ": Change state: " << +playerCommand.command() << ", play = " << play << std::endl;
 
                     if (3 == playerCommand.command()) {
                         std::clog << PROGRAM << ": Change state: " << +playerCommand.command() << ", seekTo: " << playerCommand.seekTo() << std::endl;
                         player.seekTo(playerCommand.seekTo());
                     }
+
+                    if (4 == playerCommand.command()) {
+                        play = false;
+                        step = true;
+                        std::clog << PROGRAM << ": Change state: " << +playerCommand.command() << ", play = " << play << std::endl;
+                    }
+
                     playCommandUpdate = false;
                 }
                 // If playback is desired, relay the Envelope to the OD4Session.
-                if (play) {
+                if (play || step) {
                     auto next = player.getNextEnvelopeToBeReplayed();
                     if (next.first) {
                         if (od4 && od4->isRunning()) {
@@ -17028,6 +16740,9 @@ inline int32_t cluon_replay(int32_t argc, char **argv) {
                 else {
                     std::this_thread::sleep_for(std::chrono::duration<int32_t, std::milli>(100)); // LCOV_EXCL_LINE
                 } // LCOV_EXCL_LINE
+
+                // Reset step.
+                step = false;
             }
             retCode = 0;
         }

@@ -355,6 +355,7 @@ int32_t main(int32_t argc, char **argv) {
     sharedMemory2->notifyAll();
 }
 
+#if 0
                         sharedMemory->lock();
 
                         if (isMJPEG) {
@@ -370,8 +371,6 @@ int32_t main(int32_t argc, char **argv) {
                             int outLinesize[1] = { static_cast<int>(WIDTH * BPP/8 /* RGB is 3 pixels */) };
                             uint8_t *dst = reinterpret_cast<uint8_t*>(sharedMemory->data());
                             sws_scale(yuv2rgbContext, inData, inLinesize, 0, HEIGHT, &dst, outLinesize);
-
-#if 0
 {
     sws_scale(convertContext, inData, inLinesize, 0, HEIGHT, picture_in.img.plane, picture_in.img.i_stride);
 
@@ -402,7 +401,6 @@ int32_t main(int32_t argc, char **argv) {
         i_frame++;
     }
 }
-#endif
                         }
 
                         if (VERBOSE && (isMJPEG || isYUYV422)) {
@@ -422,6 +420,7 @@ int32_t main(int32_t argc, char **argv) {
 
                         sharedMemory->unlock();
                         sharedMemory->notifyAll();
+#endif
                     }
 
                     if (0 > ::ioctl(videoDevice, VIDIOC_QBUF, &v4l2_buf)) {
