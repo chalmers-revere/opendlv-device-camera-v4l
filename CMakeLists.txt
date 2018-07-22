@@ -76,6 +76,10 @@ find_package(Libyuv REQUIRED)
 include_directories(SYSTEM ${YUV_INCLUDE_DIRS})
 set(LIBRARIES ${LIBRARIES} ${YUV_LIBRARIES})
 
+find_package(JPEG REQUIRED)
+include_directories(SYSTEM ${JPEG_INCLUDE_DIR})
+set(LIBRARIES ${LIBRARIES} ${JPEG_LIBRARIES})
+
 find_package(X11 REQUIRED)
 include_directories(SYSTEM ${X11_INCLUDE_DIR})
 set(LIBRARIES ${LIBRARIES} ${X11_X11_LIB})
