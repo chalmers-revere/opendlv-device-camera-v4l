@@ -31,8 +31,6 @@
 # endif
 #endif
 
-#include <X11/Xlib.h>
-
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
@@ -41,11 +39,8 @@
 #include <unistd.h>
 
 #include <linux/videodev2.h>
-
-extern "C" {
-    #include <libswscale/swscale.h>
-    #include <x264.h>
-}
+#include <X11/Xlib.h>
+#include <libyuv.h>
 
 #include <atomic>
 #include <chrono>
@@ -100,7 +95,8 @@ int32_t main(int32_t argc, char **argv) {
             std::cerr << argv[0] << ": freq must be larger than 0; found " << FREQ << "." << std::endl;
             return retCode = 1;
         }
-        const uint32_t SIZE{WIDTH * HEIGHT * BPP/8};
+//        const uint32_t SIZE{WIDTH * HEIGHT * BPP/8}; // RGB24
+        const uint32_t SIZE{WIDTH * HEIGHT * 2}; // YUYV422
         const std::string NAME{(commandlineArguments["name"].size() != 0) ? commandlineArguments["name"] : "/cam0"};
         const uint32_t ID{(commandlineArguments["id"].size() != 0) ? static_cast<uint32_t>(std::stoi(commandlineArguments["id"])) : 0};
         (void)ID;
@@ -196,10 +192,7 @@ int32_t main(int32_t argc, char **argv) {
             uint32_t length;
             void *buf;
         };
-
         struct buffer buffers[BUFFER_COUNT];
-
-
         for (uint8_t i = 0; i < BUFFER_COUNT; i++) {
             struct v4l2_buffer v4l2_buf;
             ::memset(&v4l2_buf, 0, sizeof(struct v4l2_buffer));
@@ -242,75 +235,46 @@ int32_t main(int32_t argc, char **argv) {
             return retCode = 1;
         }
 
-
-        x264_param_t parameters;
-        x264_picture_t picture_in, picture_out;
-        x264_t* encoder;
-
-        x264_param_default_preset(&parameters, "veryfast", "zerolatency");
-        parameters.i_log_level = X264_LOG_INFO;
-        parameters.i_threads = 1;
-        parameters.i_bitdepth = 8;
-        parameters.i_keyint_min = 10;
-        parameters.i_keyint_max = 10;
-        parameters.i_csp = X264_CSP_I420;
-        parameters.i_width  = WIDTH;
-        parameters.i_height = HEIGHT;
-        parameters.i_fps_num = static_cast<uint32_t>(FREQ);
-        parameters.b_vfr_input = 0;
-        parameters.b_repeat_headers = 1;
-        parameters.b_annexb = 1;
-        x264_param_apply_profile(&parameters, "baseline");
-
-        encoder = x264_encoder_open(&parameters);
-        x264_picture_alloc(&picture_in, X264_CSP_I420, parameters.i_width, parameters.i_height);
-        picture_in.i_type = X264_TYPE_AUTO;
-        picture_in.img.i_csp = X264_CSP_I420;
-
-        SwsContext* convertContext = sws_getContext(parameters.i_width, parameters.i_height, AV_PIX_FMT_YUYV422, parameters.i_width, parameters.i_height, AV_PIX_FMT_YUV420P, SWS_FAST_BILINEAR, 0, 0, 0);
-
-
         // Interface to a running OpenDaVINCI session (ignoring any incoming Envelopes).
         cluon::OD4Session od4{static_cast<uint16_t>(std::stoi(commandlineArguments["cid"]))};
 
         std::unique_ptr<cluon::SharedMemory> sharedMemory(new cluon::SharedMemory{NAME, SIZE});
-        std::unique_ptr<cluon::SharedMemory> sharedMemory2(new cluon::SharedMemory{NAME+"2", WIDTH*2*HEIGHT});
-        if ( (sharedMemory && sharedMemory->valid()) &&
-             (sharedMemory2 && sharedMemory2->valid()) ) {
-            std::clog << argv[0] << ": Data from camera '" << commandlineArguments["camera"]<< "' available in shared memory '" << sharedMemory->name() << "' (" << sharedMemory->size() << ") and " << sharedMemory2->name() << "' (" << sharedMemory2->size() << ")." << std::endl;
+        if (sharedMemory && sharedMemory->valid()) {
+            std::clog << argv[0] << ": Data from camera '" << commandlineArguments["camera"]<< "' available in shared memory '" << sharedMemory->name() << "' (" << sharedMemory->size() << ")." << std::endl;
 
             // Define timeout for select system call.
             struct timeval timeout {};
             fd_set setOfFiledescriptorsToReadFrom{};
 
-            struct SwsContext *yuv2rgbContext{nullptr};
-            if (BGR2RGB) {
-                yuv2rgbContext = sws_getContext(WIDTH, HEIGHT, AV_PIX_FMT_YUYV422, WIDTH, HEIGHT, AV_PIX_FMT_BGR24, 0, 0, 0, 0);
-            }
-            else {
-                yuv2rgbContext = sws_getContext(WIDTH, HEIGHT, AV_PIX_FMT_YUYV422, WIDTH, HEIGHT, AV_PIX_FMT_RGB24, 0, 0, 0, 0);
-            }
+//            if (BGR2RGB) {
+//                yuv2rgbContext = sws_getContext(WIDTH, HEIGHT, AV_PIX_FMT_YUYV422, WIDTH, HEIGHT, AV_PIX_FMT_BGR24, 0, 0, 0, 0);
+//            }
+//            else {
+//                yuv2rgbContext = sws_getContext(WIDTH, HEIGHT, AV_PIX_FMT_YUYV422, WIDTH, HEIGHT, AV_PIX_FMT_RGB24, 0, 0, 0, 0);
+//            }
 
-            struct SwsContext *rgb2rgbaContext{nullptr};
-            if (BGR2RGB) {
-                rgb2rgbaContext = sws_getContext(WIDTH, HEIGHT, AV_PIX_FMT_BGR24, WIDTH, HEIGHT, AV_PIX_FMT_RGB32, 0, 0, 0, 0);
-            }
-            else {
-                rgb2rgbaContext = sws_getContext(WIDTH, HEIGHT, AV_PIX_FMT_RGB24, WIDTH, HEIGHT, AV_PIX_FMT_RGB32, 0, 0, 0, 0);
-            }
+//            struct SwsContext *rgb2rgbaContext{nullptr};
+//            if (BGR2RGB) {
+//                rgb2rgbaContext = sws_getContext(WIDTH, HEIGHT, AV_PIX_FMT_BGR24, WIDTH, HEIGHT, AV_PIX_FMT_RGB32, 0, 0, 0, 0);
+//            }
+//            else {
+//                rgb2rgbaContext = sws_getContext(WIDTH, HEIGHT, AV_PIX_FMT_RGB24, WIDTH, HEIGHT, AV_PIX_FMT_RGB32, 0, 0, 0, 0);
+//            }
 
 
             // Accessing the low-level X11 data display.
-            char *imageRGBA = static_cast<char*>(malloc(WIDTH*HEIGHT*4));
-            if (nullptr == imageRGBA) {
-                std::cerr << argv[0] << ": Could not allocate memory for RGBA image." << std::endl;
-                return retCode = 1;
-            }
+            char *imageRGBA{nullptr};
             Display* display{nullptr};
             Visual* visual{nullptr};
             Window window{0};
             XImage* ximage{nullptr};
             if (VERBOSE) {
+                imageRGBA = static_cast<char*>(malloc(WIDTH*HEIGHT*4));
+                if (nullptr == imageRGBA) {
+                    std::cerr << argv[0] << ": Could not allocate memory for RGBA image." << std::endl;
+                    return retCode = 1;
+                }
+
                 display = XOpenDisplay(NULL);
                 visual = DefaultVisual(display, 0);
                 window = XCreateSimpleWindow(display, RootWindow(display, 0), 0, 0, WIDTH, HEIGHT, 1, 0, 0);
@@ -318,7 +282,9 @@ int32_t main(int32_t argc, char **argv) {
                 XMapWindow(display, window);
             }
 
-            int i_frame{0};
+            const uint32_t SIZE_OF_YUV420{WIDTH * HEIGHT * 3 / 2}; // YUV420
+            std::vector<unsigned char> yuv420Frame;
+            yuv420Frame.resize(SIZE_OF_YUV420, '0');
 
             while (od4.isRunning()) {
                 timeout.tv_sec  = 1;
@@ -346,81 +312,33 @@ int32_t main(int32_t argc, char **argv) {
                     unsigned char *bufferStart = (unsigned char *) buffers[bufferIndex].buf;
 
                     if (0 < bufferSize) {
-
-// Copy raw YUYV422 data.
-{
-    sharedMemory2->lock();
-    memcpy(sharedMemory2->data(), bufferStart, WIDTH * 2 * HEIGHT);
-    sharedMemory2->unlock();
-    sharedMemory2->notifyAll();
-}
-
-#if 0
                         sharedMemory->lock();
 
+                        memcpy(sharedMemory->data(), bufferStart, WIDTH * HEIGHT * 2); // YUYV422
+
                         if (isMJPEG) {
-                            int width = 0;
-                            int height = 0;
-                            int actualBytesPerPixel = 0;
-                            int requestedBytesPerPixel = 3;
-                            decompress(bufferStart, bufferSize, &width, &height, &actualBytesPerPixel, requestedBytesPerPixel, BGR2RGB, reinterpret_cast<unsigned char*>(sharedMemory->data()), sharedMemory->size());
-                        }
-                        if (isYUYV422) {
-                            const uint8_t *const inData[1] = { bufferStart };
-                            int inLinesize[1] = { static_cast<int>(WIDTH * 2 /* 2*WIDTH for YUYV 422*/) };
-                            int outLinesize[1] = { static_cast<int>(WIDTH * BPP/8 /* RGB is 3 pixels */) };
-                            uint8_t *dst = reinterpret_cast<uint8_t*>(sharedMemory->data());
-                            sws_scale(yuv2rgbContext, inData, inLinesize, 0, HEIGHT, &dst, outLinesize);
-{
-    sws_scale(convertContext, inData, inLinesize, 0, HEIGHT, picture_in.img.plane, picture_in.img.i_stride);
-
-    x264_nal_t* nals;
-    int i_nals = 0;
-    picture_in.i_pts = i_frame;
-    int frameSize = x264_encoder_encode(encoder, &nals, &i_nals, &picture_in, &picture_out);
-    if (frameSize > 0) {
-        if (!STDOUT) {
-            std::stringstream filename;
-            filename << "frame" << std::setw(4) << std::setfill('0') << i_frame << ".h264";
-
-            std::fstream fout(filename.str().c_str(), std::ios::out|std::ios::binary);
-            fout.write(reinterpret_cast<char*>(nals->p_payload), frameSize);
-            fout.close();
-        }
-        else {
-//            opendlv::proxy::ImageReading ir;
-//            ir.format("h264");
-//            ir.width(WIDTH);
-//            ir.height(HEIGHT);
-//            const std::string d(reinterpret_cast<char*>(nals->p_payload), frameSize);
-//            ir.data(d);
-//            od4.send(ir);
-//            std::cout.write(reinterpret_cast<char*>(nals->p_payload), frameSize);
-//            std::cout.flush();
-        }
-        i_frame++;
-    }
-}
+//                            int width = 0;
+//                            int height = 0;
+//                            int actualBytesPerPixel = 0;
+//                            int requestedBytesPerPixel = 3;
+//                            decompress(bufferStart, bufferSize, &width, &height, &actualBytesPerPixel, requestedBytesPerPixel, BGR2RGB, reinterpret_cast<unsigned char*>(sharedMemory->data()), sharedMemory->size());
                         }
 
-                        if (VERBOSE && (isMJPEG || isYUYV422)) {
-                            if ( (nullptr != ximage) && (nullptr != display) && (nullptr != rgb2rgbaContext) ) {
-                                // First, transform to RGBA.
-                                uint8_t *src = reinterpret_cast<uint8_t*>(sharedMemory->data());
-                                const uint8_t *const inData[1] = { src };
-                                int inLinesize[1] = { static_cast<int>(WIDTH * BPP/8 /* RGB is 3 pixels */) };
-                                int outLinesize[1] = { static_cast<int>(WIDTH * (BPP/8+1) /* RGBA is 4 pixels */) };
-                                uint8_t *dst = reinterpret_cast<uint8_t*>(imageRGBA);
-                                sws_scale(rgb2rgbaContext, inData, inLinesize, 0, HEIGHT, &dst, outLinesize);
-
-                                // Now, display.
-                                XPutImage(display, window, DefaultGC(display, 0), ximage, 0, 0, 0, 0, WIDTH, HEIGHT);
-                            }
+                        if (VERBOSE && isYUYV422) {
+                            libyuv::YUY2ToI420(reinterpret_cast<unsigned char*>(sharedMemory->data()), WIDTH * 2 /* 2*WIDTH for YUYV 422*/,
+                                               &yuv420Frame[0], WIDTH,
+                                               &yuv420Frame[WIDTH * HEIGHT], WIDTH/2,
+                                               &yuv420Frame[WIDTH * HEIGHT + ((WIDTH * HEIGHT) >> 2)], WIDTH/2,
+                                               WIDTH, HEIGHT);
+                            libyuv::I420ToARGB(&yuv420Frame[0], WIDTH,
+                                               &yuv420Frame[WIDTH * HEIGHT], WIDTH/2,
+                                               &yuv420Frame[WIDTH * HEIGHT + ((WIDTH * HEIGHT) >> 2)], WIDTH/2,
+                                               reinterpret_cast<uint8_t*>(imageRGBA), WIDTH * 4, WIDTH, HEIGHT);
+                            XPutImage(display, window, DefaultGC(display, 0), ximage, 0, 0, 0, 0, WIDTH, HEIGHT);
                         }
 
                         sharedMemory->unlock();
                         sharedMemory->notifyAll();
-#endif
                     }
 
                     if (0 > ::ioctl(videoDevice, VIDIOC_QBUF, &v4l2_buf)) {
@@ -448,9 +366,6 @@ int32_t main(int32_t argc, char **argv) {
         }
 
         ::close(videoDevice);
-
-        x264_encoder_close(encoder);
-        sws_freeContext(convertContext);
     }
     return retCode;
 }

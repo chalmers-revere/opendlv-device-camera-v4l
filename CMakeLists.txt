@@ -98,17 +98,13 @@ if(UNIX)
     endif()
 endif()
 
+find_package(Libyuv REQUIRED)
+include_directories(SYSTEM ${YUV_INCLUDE_DIRS})
+set(LIBRARIES ${LIBRARIES} ${YUV_LIBRARIES})
+
 find_package(X11 REQUIRED)
 include_directories(SYSTEM ${X11_INCLUDE_DIR})
 set(LIBRARIES ${LIBRARIES} ${X11_X11_LIB})
-
-find_package(Libswscale REQUIRED)
-include_directories(SYSTEM ${FFMPEGMODULES_INCLUDE_DIRS})
-set(LIBRARIES ${LIBRARIES} ${FFMPEGMODULES_LIBRARIES})
-
-find_package(Libx264 REQUIRED)
-include_directories(SYSTEM ${X264_INCLUDE_DIRS})
-set(LIBRARIES ${LIBRARIES} ${X264_LIBRARIES})
 
 ################################################################################
 # Create executable.
