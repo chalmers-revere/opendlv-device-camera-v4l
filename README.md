@@ -5,6 +5,10 @@ for the OpenDLV software ecosystem. This microservice provides the captured fram
 in two separate shared memory areas, one for a picture in [I420 format](https://wiki.videolan.org/YUV/#I420)
 and one in ARGB format.
 
+Video4Linux devices with the following image formats are supported:
+* MJPEG
+* YUYV422
+
 [![Build Status](https://travis-ci.org/chalmers-revere/opendlv-device-camera-v4l.svg?branch=master)](https://travis-ci.org/chalmers-revere/opendlv-device-camera-v4l) [![License: GPLv3](https://img.shields.io/badge/license-GPL--3-blue.svg
 )](https://www.gnu.org/licenses/gpl-3.0.txt)
 
@@ -34,7 +38,7 @@ To run this microservice using our pre-built Docker multi-arch images to open
 a Video4Linux-supported camera, simply start it as follows:
 
 ```
-docker run --rm -ti --init --ipc=host -v /tmp:/tmp -e DISPLAY=$DISPLAY --device /dev/video0 chalmersrevere/opendlv-device-camera-v4l-multi:v0.0.2 --camera=/dev/video0 --width=640 --height=480 --freq=20 --verbose
+docker run --rm -ti --init --ipc=host -v /tmp:/tmp -e DISPLAY=$DISPLAY --device /dev/video0 chalmersrevere/opendlv-device-camera-v4l-multi:v0.0.3 --camera=/dev/video0 --width=640 --height=480 --freq=20 --verbose
 ```
 
 ## Build from sources on the example of Ubuntu 16.04 LTS
