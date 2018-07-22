@@ -126,9 +126,8 @@ int32_t main(int32_t argc, char **argv) {
         bool isMJPEG{false};
         bool isYUYV422{false};
         if (v4l2_fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_MJPEG) {
-            std::clog << argv[0] << ": Capture device: " << commandlineArguments["camera"] << " provides MJPEG stream, which is not supported yet." << std::endl;
+            std::clog << argv[0] << ": Capture device: " << commandlineArguments["camera"] << " provides MJPEG stream." << std::endl;
             isMJPEG = true;
-            return retCode = 1;
         }
         if (v4l2_fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_YUYV) {
             std::clog << argv[0] << ": Capture device: " << commandlineArguments["camera"] << " provides YUYV 4:2:2 stream." << std::endl;
@@ -274,6 +273,14 @@ int32_t main(int32_t argc, char **argv) {
                         // Transform data as I420 in sharedMemoryI420.
                         sharedMemoryI420->lock();
                         {
+                            if (isMJPEG) {
+                                libyuv::MJPGToI420(bufferStart, bufferSize,
+                                                   reinterpret_cast<uint8_t*>(sharedMemoryI420->data()), WIDTH,
+                                                   reinterpret_cast<uint8_t*>(sharedMemoryI420->data()+(WIDTH * HEIGHT)), WIDTH/2,
+                                                   reinterpret_cast<uint8_t*>(sharedMemoryI420->data()+(WIDTH * HEIGHT + ((WIDTH * HEIGHT) >> 2))), WIDTH/2,
+                                                   WIDTH, HEIGHT,
+                                                   WIDTH, HEIGHT);
+                            }
                             if (isYUYV422) {
                                 libyuv::YUY2ToI420(bufferStart, WIDTH * 2 /* 2*WIDTH for YUYV 422*/,
                                                    reinterpret_cast<uint8_t*>(sharedMemoryI420->data()), WIDTH,
@@ -296,14 +303,6 @@ int32_t main(int32_t argc, char **argv) {
                             }
                         }
                         sharedMemoryARGB->unlock();
-
-//                        if (isMJPEG) {
-//                            int width = 0;
-//                            int height = 0;
-//                            int actualBytesPerPixel = 0;
-//                            int requestedBytesPerPixel = 3;
-//                            decompress(bufferStart, bufferSize, &width, &height, &actualBytesPerPixel, requestedBytesPerPixel, BGR2RGB, reinterpret_cast<unsigned char*>(sharedMemory->data()), sharedMemory->size());
-//                        }
 
                         sharedMemoryI420->notifyAll();
                         sharedMemoryARGB->notifyAll();
