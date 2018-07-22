@@ -45,34 +45,43 @@ int32_t main(int32_t argc, char **argv) {
          (0 == commandlineArguments.count("width")) ||
          (0 == commandlineArguments.count("height")) ||
          (0 == commandlineArguments.count("freq")) ) {
-        std::cerr << argv[0] << " interfaces with the given V4L camera (e.g., /dev/video0) and provides the captured image in a shared memory area to be used with further microservices from OpenDLV." << std::endl;
-        std::cerr << "Usage:   " << argv[0] << " --camera=<V4L dev node> --width=<width> --height=<height> [--name=<unique name for the associated shared memory>] [--id=<Identifier in case of multiple cameras>] [--verbose]" << std::endl;
-        std::cerr << "         --camera:  V4L camera device node to be used" << std::endl;
-        std::cerr << "         --name:    when omitted, '/cam0' is chosen" << std::endl;
-        std::cerr << "         --width:   desired width of a frame" << std::endl;
-        std::cerr << "         --height:  desired height of a frame" << std::endl;
-        std::cerr << "         --freq:    desired frame rate" << std::endl;
-        std::cerr << "         --verbose: display captured image" << std::endl;
-        std::cerr << "Example: " << argv[0] << " --camera=/dev/video0 --name=cam0 -width=640 --height=480 --freq=20 --verbose" << std::endl;
+        std::cerr << argv[0] << " interfaces with the given V4L camera (e.g., /dev/video0) and provides the captured image in two shared memory areas: one in I420 format and one in ARGB format." << std::endl;
+        std::cerr << "Usage:   " << argv[0] << " --camera=<V4L dev node> --width=<width> --height=<height> [--name.i420=<unique name for the shared memory in I420 format>] [--name.argb=<unique name for the shared memory in ARGB format>] [--verbose]" << std::endl;
+        std::cerr << "         --camera:    V4L camera device node to be used" << std::endl;
+        std::cerr << "         --name.i420: name of the shared memory for the I420 formatted image; when omitted, the last part of the device node + '.i420' is chosen" << std::endl;
+        std::cerr << "         --name.argb: name of the shared memory for the I420 formatted image; when omitted, the last part of the device node + '.argb' is chosen" << std::endl;
+        std::cerr << "         --width:     desired width of a frame" << std::endl;
+        std::cerr << "         --height:    desired height of a frame" << std::endl;
+        std::cerr << "         --freq:      desired frame rate" << std::endl;
+        std::cerr << "         --verbose:   display captured image" << std::endl;
+        std::cerr << "Example: " << argv[0] << " --camera=/dev/video0 --width=640 --height=480 --freq=20 --verbose" << std::endl;
         retCode = 1;
     }
     else {
         const uint32_t WIDTH{static_cast<uint32_t>(std::stoi(commandlineArguments["width"]))};
         const uint32_t HEIGHT{static_cast<uint32_t>(std::stoi(commandlineArguments["height"]))};
-        const float FREQ{static_cast<float>(std::stof(commandlineArguments["freq"]))};
+        const bool VERBOSE{commandlineArguments.count("verbose") != 0};
 
+        const float FREQ{static_cast<float>(std::stof(commandlineArguments["freq"]))};
         if ( !(FREQ > 0) ) {
             std::cerr << argv[0] << ": freq must be larger than 0; found " << FREQ << "." << std::endl;
             return retCode = 1;
         }
-//        const uint32_t SIZE{WIDTH * HEIGHT * 3}; // RGB24
-        const uint32_t SIZE{WIDTH * HEIGHT * 2}; // YUYV422
-        const std::string NAME{(commandlineArguments["name"].size() != 0) ? commandlineArguments["name"] : "/cam0"};
-        const uint32_t ID{(commandlineArguments["id"].size() != 0) ? static_cast<uint32_t>(std::stoi(commandlineArguments["id"])) : 0};
-        (void)ID;
-        const bool VERBOSE{commandlineArguments.count("verbose") != 0};
 
+        // Set up the names for the shared memory areas.
+        std::string NAME_I420{commandlineArguments["camera"]};
+        auto pos = NAME_I420.find_last_of('/');
+        std::string NAME_ARGB = NAME_I420.substr(pos+1);
+        NAME_I420 = NAME_ARGB + ".i420";
+        if ((commandlineArguments["name.i420"].size() != 0)) {
+            NAME_I420 = commandlineArguments["name.i420"];
+        }
+        NAME_ARGB += ".argb";
+        if ((commandlineArguments["name.argb"].size() != 0)) {
+            NAME_ARGB = commandlineArguments["name.argb"];
+        }
 
+        // V4L initialization.
         int videoDevice = open(commandlineArguments["camera"].c_str(), O_RDWR);
         if (-1 == videoDevice) {
             std::cerr << argv[0] << ": Failed to open capture device: " << commandlineArguments["camera"] << std::endl;
@@ -81,17 +90,14 @@ int32_t main(int32_t argc, char **argv) {
 
         struct v4l2_capability v4l2_cap;
         ::memset(&v4l2_cap, 0, sizeof(struct v4l2_capability));
-
         if (0 > ::ioctl(videoDevice, VIDIOC_QUERYCAP, &v4l2_cap)) {
             std::cerr << argv[0] << ": Failed to query capture device: " << commandlineArguments["camera"] << std::endl;
             return retCode = 1;
         }
-
         if (!(v4l2_cap.capabilities & V4L2_CAP_VIDEO_CAPTURE)) {
             std::cerr << argv[0] << ": Capture device: " << commandlineArguments["camera"] << " does not support V4L2_CAP_CAPTURE." << std::endl;
             return retCode = 1;
         }
-
         if (!(v4l2_cap.capabilities & V4L2_CAP_STREAMING)) {
             std::cerr << argv[0] << ": Capture device: " << commandlineArguments["camera"] << " does not support V4L2_CAP_STREAMING." << std::endl;
             return retCode = 1;
@@ -143,15 +149,13 @@ int32_t main(int32_t argc, char **argv) {
             return retCode = 1;
         }
 
-        constexpr uint32_t BUFFER_COUNT{30};
+        const uint32_t BUFFER_COUNT{static_cast<uint32_t>(FREQ) + 10};
 
         struct v4l2_requestbuffers v4l2_req_bufs;
         ::memset(&v4l2_req_bufs, 0, sizeof(struct v4l2_requestbuffers));
-
         v4l2_req_bufs.count = BUFFER_COUNT;
         v4l2_req_bufs.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         v4l2_req_bufs.memory = V4L2_MEMORY_MMAP;
-
         if (0 > ::ioctl(videoDevice, VIDIOC_REQBUFS, &v4l2_req_bufs)) {
             std::cerr << argv[0] << ": Could not allocate buffers for capture device: " << commandlineArguments["camera"] << std::endl;
             return retCode = 1;
@@ -204,37 +208,42 @@ int32_t main(int32_t argc, char **argv) {
             return retCode = 1;
         }
 
-        std::unique_ptr<cluon::SharedMemory> sharedMemory(new cluon::SharedMemory{NAME, SIZE});
-        if (sharedMemory && sharedMemory->valid()) {
-            std::clog << argv[0] << ": Data from camera '" << commandlineArguments["camera"]<< "' available in shared memory '" << sharedMemory->name() << "' (" << sharedMemory->size() << ")." << std::endl;
+        std::unique_ptr<cluon::SharedMemory> sharedMemoryI420(new cluon::SharedMemory{NAME_I420, WIDTH * HEIGHT * 3/2});
+        if (!sharedMemoryI420 || !sharedMemoryI420->valid()) {
+            std::cerr << argv[0] << ": Failed to create shared memory '" << NAME_I420 << "'." << std::endl;
+            return retCode = 1;
+        }
+
+        std::unique_ptr<cluon::SharedMemory> sharedMemoryARGB(new cluon::SharedMemory{NAME_ARGB, WIDTH * HEIGHT * 4});
+        if (!sharedMemoryARGB || !sharedMemoryARGB->valid()) {
+            std::cerr << argv[0] << ": Failed to create shared memory '" << NAME_ARGB << "'." << std::endl;
+            return retCode = 1;
+        }
+
+        if ( (sharedMemoryI420 && sharedMemoryI420->valid()) &&
+             (sharedMemoryARGB && sharedMemoryARGB->valid()) ) {
+            std::clog << argv[0] << ": Data from camera '" << commandlineArguments["camera"]<< "' available in I420 format in shared memory '" << sharedMemoryI420->name() << "' (" << sharedMemoryI420->size() << ") and in ARGB format in shared memory '" << sharedMemoryARGB->name() << "' (" << sharedMemoryARGB->size() << ")." << std::endl;
 
             // Define timeout for select system call.
             struct timeval timeout {};
             fd_set setOfFiledescriptorsToReadFrom{};
 
             // Accessing the low-level X11 data display.
-            char *imageRGBA{nullptr};
             Display* display{nullptr};
             Visual* visual{nullptr};
             Window window{0};
             XImage* ximage{nullptr};
             if (VERBOSE) {
-                imageRGBA = static_cast<char*>(malloc(WIDTH*HEIGHT*4));
-                if (nullptr == imageRGBA) {
-                    std::cerr << argv[0] << ": Could not allocate memory for RGBA image." << std::endl;
-                    return retCode = 1;
-                }
-
                 display = XOpenDisplay(NULL);
                 visual = DefaultVisual(display, 0);
                 window = XCreateSimpleWindow(display, RootWindow(display, 0), 0, 0, WIDTH, HEIGHT, 1, 0, 0);
-                ximage = XCreateImage(display, visual, 24, ZPixmap, 0, imageRGBA, WIDTH, HEIGHT, 32, 0);
+                sharedMemoryARGB->lock();
+                {
+                    ximage = XCreateImage(display, visual, 24, ZPixmap, 0, sharedMemoryARGB->data(), WIDTH, HEIGHT, 32, 0);
+                }
+                sharedMemoryARGB->unlock();
                 XMapWindow(display, window);
             }
-
-            const uint32_t SIZE_OF_YUV420{WIDTH * HEIGHT * 3 / 2}; // YUV420
-            std::vector<unsigned char> yuv420Frame;
-            yuv420Frame.resize(SIZE_OF_YUV420, '0');
 
             while (!cluon::TerminateHandler::instance().isTerminated.load()) {
                 timeout.tv_sec  = 1;
@@ -262,33 +271,42 @@ int32_t main(int32_t argc, char **argv) {
                     unsigned char *bufferStart = (unsigned char *) buffers[bufferIndex].buf;
 
                     if (0 < bufferSize) {
-                        sharedMemory->lock();
+                        // Transform data as I420 in sharedMemoryI420.
+                        sharedMemoryI420->lock();
+                        {
+                            if (isYUYV422) {
+                                libyuv::YUY2ToI420(bufferStart, WIDTH * 2 /* 2*WIDTH for YUYV 422*/,
+                                                   reinterpret_cast<uint8_t*>(sharedMemoryI420->data()), WIDTH,
+                                                   reinterpret_cast<uint8_t*>(sharedMemoryI420->data()+(WIDTH * HEIGHT)), WIDTH/2,
+                                                   reinterpret_cast<uint8_t*>(sharedMemoryI420->data()+(WIDTH * HEIGHT + ((WIDTH * HEIGHT) >> 2))), WIDTH/2,
+                                                   WIDTH, HEIGHT);
+                            }
+                        }
+                        sharedMemoryI420->unlock();
 
-                        memcpy(sharedMemory->data(), bufferStart, WIDTH * HEIGHT * 2); // YUYV422
+                        sharedMemoryARGB->lock();
+                        {
+                            libyuv::I420ToARGB(reinterpret_cast<uint8_t*>(sharedMemoryI420->data()), WIDTH,
+                                               reinterpret_cast<uint8_t*>(sharedMemoryI420->data()+(WIDTH * HEIGHT)), WIDTH/2,
+                                               reinterpret_cast<uint8_t*>(sharedMemoryI420->data()+(WIDTH * HEIGHT + ((WIDTH * HEIGHT) >> 2))), WIDTH/2,
+                                               reinterpret_cast<uint8_t*>(sharedMemoryARGB->data()), WIDTH * 4, WIDTH, HEIGHT);
 
-                        if (isMJPEG) {
+                            if (VERBOSE) {
+                                XPutImage(display, window, DefaultGC(display, 0), ximage, 0, 0, 0, 0, WIDTH, HEIGHT);
+                            }
+                        }
+                        sharedMemoryARGB->unlock();
+
+//                        if (isMJPEG) {
 //                            int width = 0;
 //                            int height = 0;
 //                            int actualBytesPerPixel = 0;
 //                            int requestedBytesPerPixel = 3;
 //                            decompress(bufferStart, bufferSize, &width, &height, &actualBytesPerPixel, requestedBytesPerPixel, BGR2RGB, reinterpret_cast<unsigned char*>(sharedMemory->data()), sharedMemory->size());
-                        }
+//                        }
 
-                        if (VERBOSE && isYUYV422) {
-                            libyuv::YUY2ToI420(reinterpret_cast<unsigned char*>(sharedMemory->data()), WIDTH * 2 /* 2*WIDTH for YUYV 422*/,
-                                               &yuv420Frame[0], WIDTH,
-                                               &yuv420Frame[WIDTH * HEIGHT], WIDTH/2,
-                                               &yuv420Frame[WIDTH * HEIGHT + ((WIDTH * HEIGHT) >> 2)], WIDTH/2,
-                                               WIDTH, HEIGHT);
-                            libyuv::I420ToARGB(&yuv420Frame[0], WIDTH,
-                                               &yuv420Frame[WIDTH * HEIGHT], WIDTH/2,
-                                               &yuv420Frame[WIDTH * HEIGHT + ((WIDTH * HEIGHT) >> 2)], WIDTH/2,
-                                               reinterpret_cast<uint8_t*>(imageRGBA), WIDTH * 4, WIDTH, HEIGHT);
-                            XPutImage(display, window, DefaultGC(display, 0), ximage, 0, 0, 0, 0, WIDTH, HEIGHT);
-                        }
-
-                        sharedMemory->unlock();
-                        sharedMemory->notifyAll();
+                        sharedMemoryI420->notifyAll();
+                        sharedMemoryARGB->notifyAll();
                     }
 
                     if (0 > ::ioctl(videoDevice, VIDIOC_QBUF, &v4l2_buf)) {
@@ -300,9 +318,6 @@ int32_t main(int32_t argc, char **argv) {
             if (VERBOSE) {
                 XCloseDisplay(display);
             }
-        }
-        else {
-            std::cerr << argv[0] << ": Failed to create shared memory '" << NAME << "'." << std::endl;
         }
 
         type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
