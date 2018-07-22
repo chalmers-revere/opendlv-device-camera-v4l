@@ -1,11 +1,15 @@
 language: cpp
+
 branches:
   only:
   - "/^master$/"
   - "/^pre-release$/"
+
 cache: ccache
+
 compiler:
 - gcc
+
 addons:
   apt:
     sources:
@@ -13,14 +17,16 @@ addons:
     packages:
     - g++-6
     - libx11-dev
-    - linux-headers
+    - linux-headers-$(uname -r)
+
 install:
 - "[ $CC = gcc ] && export CC=gcc-6 || true"
 - "[ $CXX = g++ ] && export CXX=g++-6 || true"
+
 script:
-- git clone --depth 1 https://chromium.googlesource.com/libyuv/libyuv && cd libyuv
-  && make -f linux.mk libyuv.a && cp libyuv.a /usr/lib && cd include && cp -r * /usr/include
+- git clone --depth 1 https://chromium.googlesource.com/libyuv/libyuv && cd libyuv && make -f linux.mk libyuv.a && cp libyuv.a /usr/lib && cd include && cp -r * /usr/include
 - mkdir -p build && cd build && cmake .. && make && make test
+
 notifications:
   email:
     on_success: never
