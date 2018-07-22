@@ -67,42 +67,36 @@ unsigned char* decompress(const unsigned char *src, const uint32_t &srcSize, int
 int32_t main(int32_t argc, char **argv) {
     int32_t retCode{0};
     auto commandlineArguments = cluon::getCommandlineArguments(argc, argv);
-    if ( (0 == commandlineArguments.count("camera")) || (0 == commandlineArguments.count("cid")) || (0 == commandlineArguments.count("width")) || (0 == commandlineArguments.count("height")) || (0 == commandlineArguments.count("bpp")) || (0 == commandlineArguments.count("freq")) ) {
-        std::cerr << argv[0] << " interfaces with the given V4L camera (e.g., /dev/video0) and publishes it to a running OpenDaVINCI session using the OpenDLV Standard Message Set." << std::endl;
-        std::cerr << "Usage:   " << argv[0] << " --camera=<V4L dev node> --cid=<OpenDaVINCI session> --width=<width> --height=<height> --bpp=<bits per pixel> [--name=<unique name for the associated shared memory>] [--id=<Identifier in case of multiple cameras>] [--verbose]" << std::endl;
-        std::cerr << "         --freq:    desired frame rate" << std::endl;
+    if ( (0 == commandlineArguments.count("camera")) ||
+         (0 == commandlineArguments.count("width")) ||
+         (0 == commandlineArguments.count("height")) ||
+         (0 == commandlineArguments.count("freq")) ) {
+        std::cerr << argv[0] << " interfaces with the given V4L camera (e.g., /dev/video0) and provides the captured image in a shared memory area to be used with further microservices from OpenDLV." << std::endl;
+        std::cerr << "Usage:   " << argv[0] << " --camera=<V4L dev node> --width=<width> --height=<height> [--name=<unique name for the associated shared memory>] [--id=<Identifier in case of multiple cameras>] [--verbose]" << std::endl;
+        std::cerr << "         --camera:  V4L camera device node to be used" << std::endl;
+        std::cerr << "         --name:    when omitted, '/cam0' is chosen" << std::endl;
         std::cerr << "         --width:   desired width of a frame" << std::endl;
         std::cerr << "         --height:  desired height of a frame" << std::endl;
-        std::cerr << "         --bpp:     desired bits per pixel of a frame (must be either 8 or 24)" << std::endl;
-        std::cerr << "         --bgr2rgb: convert BGR to RGB" << std::endl;
-        std::cerr << "         --name:    when omitted, '/cam0' is chosen" << std::endl;
-        std::cerr << "         --verbose: when set, the raw image is displayed" << std::endl;
-        std::cerr << "         --stdout:  dump to stdout" << std::endl;
-        std::cerr << "Example: " << argv[0] << " --cid=111 --camera=/dev/video0 --name=cam0" << std::endl;
+        std::cerr << "         --freq:    desired frame rate" << std::endl;
+        std::cerr << "         --verbose: display captured image" << std::endl;
+        std::cerr << "Example: " << argv[0] << " --camera=/dev/video0 --name=cam0 -width=640 --height=480 --freq=20 --verbose" << std::endl;
         retCode = 1;
     }
     else {
         const uint32_t WIDTH{static_cast<uint32_t>(std::stoi(commandlineArguments["width"]))};
         const uint32_t HEIGHT{static_cast<uint32_t>(std::stoi(commandlineArguments["height"]))};
-        const uint32_t BPP{static_cast<uint32_t>(std::stoi(commandlineArguments["bpp"]))};
         const float FREQ{static_cast<float>(std::stof(commandlineArguments["freq"]))};
 
-        if ( (BPP != 24) && (BPP != 8) ) {
-            std::cerr << argv[0] << ": bits per pixel must be either 24 or 8; found " << BPP << "." << std::endl;
-            return retCode = 1;
-        }
         if ( !(FREQ > 0) ) {
             std::cerr << argv[0] << ": freq must be larger than 0; found " << FREQ << "." << std::endl;
             return retCode = 1;
         }
-//        const uint32_t SIZE{WIDTH * HEIGHT * BPP/8}; // RGB24
+//        const uint32_t SIZE{WIDTH * HEIGHT * 3}; // RGB24
         const uint32_t SIZE{WIDTH * HEIGHT * 2}; // YUYV422
         const std::string NAME{(commandlineArguments["name"].size() != 0) ? commandlineArguments["name"] : "/cam0"};
         const uint32_t ID{(commandlineArguments["id"].size() != 0) ? static_cast<uint32_t>(std::stoi(commandlineArguments["id"])) : 0};
         (void)ID;
         const bool VERBOSE{commandlineArguments.count("verbose") != 0};
-        const bool BGR2RGB{commandlineArguments.count("bgr2rgb") != 0};
-        const bool STDOUT{commandlineArguments.count("stdout") != 0};
 
 
         int videoDevice = open(commandlineArguments["camera"].c_str(), O_RDWR);
@@ -152,8 +146,9 @@ int32_t main(int32_t argc, char **argv) {
         bool isMJPEG{false};
         bool isYUYV422{false};
         if (v4l2_fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_MJPEG) {
-            std::clog << argv[0] << ": Capture device: " << commandlineArguments["camera"] << " provides MJPEG stream." << std::endl;
+            std::clog << argv[0] << ": Capture device: " << commandlineArguments["camera"] << " provides MJPEG stream, which is not supported yet." << std::endl;
             isMJPEG = true;
+            return retCode = 1;
         }
         if (v4l2_fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_YUYV) {
             std::clog << argv[0] << ": Capture device: " << commandlineArguments["camera"] << " provides YUYV 4:2:2 stream." << std::endl;
@@ -235,9 +230,6 @@ int32_t main(int32_t argc, char **argv) {
             return retCode = 1;
         }
 
-        // Interface to a running OpenDaVINCI session (ignoring any incoming Envelopes).
-        cluon::OD4Session od4{static_cast<uint16_t>(std::stoi(commandlineArguments["cid"]))};
-
         std::unique_ptr<cluon::SharedMemory> sharedMemory(new cluon::SharedMemory{NAME, SIZE});
         if (sharedMemory && sharedMemory->valid()) {
             std::clog << argv[0] << ": Data from camera '" << commandlineArguments["camera"]<< "' available in shared memory '" << sharedMemory->name() << "' (" << sharedMemory->size() << ")." << std::endl;
@@ -245,22 +237,6 @@ int32_t main(int32_t argc, char **argv) {
             // Define timeout for select system call.
             struct timeval timeout {};
             fd_set setOfFiledescriptorsToReadFrom{};
-
-//            if (BGR2RGB) {
-//                yuv2rgbContext = sws_getContext(WIDTH, HEIGHT, AV_PIX_FMT_YUYV422, WIDTH, HEIGHT, AV_PIX_FMT_BGR24, 0, 0, 0, 0);
-//            }
-//            else {
-//                yuv2rgbContext = sws_getContext(WIDTH, HEIGHT, AV_PIX_FMT_YUYV422, WIDTH, HEIGHT, AV_PIX_FMT_RGB24, 0, 0, 0, 0);
-//            }
-
-//            struct SwsContext *rgb2rgbaContext{nullptr};
-//            if (BGR2RGB) {
-//                rgb2rgbaContext = sws_getContext(WIDTH, HEIGHT, AV_PIX_FMT_BGR24, WIDTH, HEIGHT, AV_PIX_FMT_RGB32, 0, 0, 0, 0);
-//            }
-//            else {
-//                rgb2rgbaContext = sws_getContext(WIDTH, HEIGHT, AV_PIX_FMT_RGB24, WIDTH, HEIGHT, AV_PIX_FMT_RGB32, 0, 0, 0, 0);
-//            }
-
 
             // Accessing the low-level X11 data display.
             char *imageRGBA{nullptr};
@@ -286,7 +262,7 @@ int32_t main(int32_t argc, char **argv) {
             std::vector<unsigned char> yuv420Frame;
             yuv420Frame.resize(SIZE_OF_YUV420, '0');
 
-            while (od4.isRunning()) {
+            while (!cluon::TerminateHandler::instance().isTerminated.load()) {
                 timeout.tv_sec  = 1;
                 timeout.tv_usec = 0;
                 FD_ZERO(&setOfFiledescriptorsToReadFrom);
