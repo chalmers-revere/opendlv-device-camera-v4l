@@ -1,31 +1,52 @@
-# opendlv-device-camera-v4l
-OpenDLV Microservice to interface with v4l-accessible camera devices
+## OpenDLV Microservice to interface with Video4Linux-supported cameras
 
-To use this microservice, you need to allow access to your X11 server when you
-want to display the captured frame:
+This repository provides source code to interface Video4Linux-supported cameras
+for the OpenDLV software ecosystem.
+
+[![Build Status](https://travis-ci.org/chalmers-revere/opendlv-device-camera-v4l.svg?branch=master)](https://travis-ci.org/chalmers-revere/opendlv-device-camera-v4l) [![License: GPLv3](https://img.shields.io/badge/license-GPL--3-blue.svg
+)](https://www.gnu.org/licenses/gpl-3.0.txt)
+
+
+## Table of Contents
+* [Dependencies](#dependencies)
+* [Usage](#usage)
+* [Build from sources on the example of Ubuntu 16.04 LTS](#build-from-sources-on-the-example-of-ubuntu-1604-lts)
+* [License](#license)
+
+
+## Dependencies
+You need a C++14-compliant compiler to compile this project. The following
+dependency is shipped as part of the source distribution:
+
+* [libcluon](https://github.com/chrberger/libcluon) - [![License: GPLv3](https://img.shields.io/badge/license-GPL--3-blue.svg
+)](https://www.gnu.org/licenses/gpl-3.0.txt)
+
+
+## Usage
+This microservice is created automatically on changes to this repository via Docker's public registry for:
+* [x86_64](https://hub.docker.com/r/chalmersrevere/opendlv-device-camera-v4l-amd64/tags/)
+* [armhf](https://hub.docker.com/r/chalmersrevere/opendlv-device-camera-v4l-armhf/tags/)
+* [aarch64](https://hub.docker.com/r/chalmersrevere/opendlv-device-camera-v4l-aarch64/tags/)
+
+To run this microservice using our pre-built Docker multi-arch images to open
+a Video4Linux-supported camera, simply start it as follows:
 
 ```
-xhost +
+docker run --rm -ti --init --ipc=host -v /tmp:/tmp -e DISPLAY=$DISPLAY --device /dev/video0 chalmersrevere/opendlv-device-camera-v4l-multi:v0.0.1 --camera=/dev/video0 --width=640 --height=480 --freq=20 --verbose
 ```
 
-Next, you can start the streaming (omit `--verbose` to not display the window showing the raw image; the parameter ulimit specifies that maximum bytes to be locked in RAM and __must__ match with the desired video resolution: Width * Height * BitsPerPixel/8):
-```
-docker run --rm -ti --init --ipc=host -v /tmp:/tmp -e DISPLAY=$DISPLAY --device /dev/video0 v --camera=/dev/video0 --name=cam0 --width=640 --height=480 --freq=20 --verbose
+## Build from sources on the example of Ubuntu 16.04 LTS
+To build this software, you need cmake, C++14 or newer, libx11-dev, and make.
+Having these preconditions, just run `cmake` and `make` as follows:
 
-docker run \
-           --rm \
-           -ti \
-           --init \
-           --device /dev/video0 \
-           --ipc=host
-           -v /tmp:/tmp \
-           -e DISPLAY=$DISPLAY \
-           producer:latest \
-               --camera=/dev/video0 \
-               --name=camera0 \
-               --width=640 \
-               --height=480 \
-               --freq=20 \
-               --verbose
 ```
+mkdir build && cd build
+cmake -D CMAKE_BUILD_TYPE=Release ..
+make && make test && make install
+```
+
+
+## License
+
+* This project is released under the terms of the GNU GPLv3 License
 
