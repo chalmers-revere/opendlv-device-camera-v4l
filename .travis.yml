@@ -24,7 +24,7 @@ install:
 - "[ $CXX = g++ ] && export CXX=g++-6 || true"
 
 script:
-- git clone --depth 1 https://chromium.googlesource.com/libyuv/libyuv && cd libyuv && make -f linux.mk libyuv.a && sudo cp libyuv.a /usr/lib && cd include && sudo cp -r * /usr/include && cd ../..
+- git clone --depth 1 https://chromium.googlesource.com/libyuv/libyuv && cd libyuv && make -f linux.mk CFLAGS="-O2 -fomit-frame-pointer -Iinclude/ -DHAVE_JPEG" CXXFLAGS="-O2 -fomit-frame-pointer -Iinclude/ -DHAVE_JPEG" libyuv.a && sudo cp libyuv.a /usr/lib && cd include && sudo cp -r * /usr/include && cd ../..
 - mkdir -p build && cd build && cmake .. && make
 
 notifications:
