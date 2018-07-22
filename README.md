@@ -1,7 +1,9 @@
 ## OpenDLV Microservice to interface with Video4Linux-supported cameras
 
 This repository provides source code to interface Video4Linux-supported cameras
-for the OpenDLV software ecosystem.
+for the OpenDLV software ecosystem. This microservice provides the captured frames
+in two separate shared memory areas, one for a picture in [I420 format](https://wiki.videolan.org/YUV/#I420)
+and one in ARGB format.
 
 [![Build Status](https://travis-ci.org/chalmers-revere/opendlv-device-camera-v4l.svg?branch=master)](https://travis-ci.org/chalmers-revere/opendlv-device-camera-v4l) [![License: GPLv3](https://img.shields.io/badge/license-GPL--3-blue.svg
 )](https://www.gnu.org/licenses/gpl-3.0.txt)
