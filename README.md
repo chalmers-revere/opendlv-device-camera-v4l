@@ -9,6 +9,8 @@ Video4Linux devices with the following image formats are supported:
 * MJPEG
 * YUYV422
 
+This software is based in part on the work of the Independent JPEG Group.
+
 [![Build Status](https://travis-ci.org/chalmers-revere/opendlv-device-camera-v4l.svg?branch=master)](https://travis-ci.org/chalmers-revere/opendlv-device-camera-v4l) [![License: GPLv3](https://img.shields.io/badge/license-GPL--3-blue.svg
 )](https://www.gnu.org/licenses/gpl-3.0.txt)
 
@@ -26,6 +28,8 @@ dependency is shipped as part of the source distribution:
 
 * [libcluon](https://github.com/chrberger/libcluon) - [![License: GPLv3](https://img.shields.io/badge/license-GPL--3-blue.svg
 )](https://www.gnu.org/licenses/gpl-3.0.txt)
+* [libyuv](https://chromium.googlesource.com/libyuv/libyuv/+/master) - [![License: BSD 3-Clause](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause) - [Google Patent License Conditions](https://chromium.googlesource.com/libyuv/libyuv/+/master/PATENTS)
+* [libjpeg-turbo](https://github.com/libjpeg-turbo/libjpeg-turbo) - [![License: BSD 3-Clause](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
 
 
 ## Usage
