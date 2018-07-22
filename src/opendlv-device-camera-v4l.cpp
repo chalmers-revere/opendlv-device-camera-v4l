@@ -16,20 +16,6 @@
  */
 
 #include "cluon-complete.hpp"
-#include "opendlv-standard-message-set.hpp"
-
-#ifndef WIN32
-# if !defined(__OpenBSD__) && !defined(__NetBSD__)
-#  pragma GCC diagnostic push
-# endif
-# pragma GCC diagnostic ignored "-Weffc++"
-#endif
-    #include "jpgd.hpp"
-#ifndef WIN32
-# if !defined(__OpenBSD__) && !defined(__NetBSD__)
-#  pragma GCC diagnostic pop
-# endif
-#endif
 
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -51,18 +37,6 @@
 #include <sstream>
 #include <string>
 #include <thread>
-
-unsigned char* decompress(const unsigned char *src, const uint32_t &srcSize, int *width, int *height, int *actualBytesPerPixel, const uint32_t &requestedBytesPerPixel, bool bgr2rgb, unsigned char *pDestBuffer, int dest_buffer_size) {
-    unsigned char* imageData = NULL;
-
-    if ( (src != NULL) && 
-         (srcSize > 0) && 
-         (requestedBytesPerPixel > 0) ) {
-        imageData = jpgd::decompress_jpeg_image_from_memory(src, srcSize, width, height, actualBytesPerPixel, requestedBytesPerPixel, bgr2rgb, pDestBuffer, dest_buffer_size);
-    }
-    return imageData;
-}
-
 
 int32_t main(int32_t argc, char **argv) {
     int32_t retCode{0};

@@ -1,6 +1,6 @@
 // This is an auto-generated header-only single-file distribution of libcluon.
-// Date: Mon, 16 Jul 2018 21:38:22 +0200
-// Version: 0.0.104
+// Date: Thu, 19 Jul 2018 20:35:46 +0200
+// Version: 0.0.105
 //
 //
 // Implementation of N4562 std::experimental::any (merged into C++17) for C++11 compilers.
