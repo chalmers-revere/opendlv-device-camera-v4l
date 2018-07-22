@@ -13,7 +13,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-# Part to build opendlv-device-camera-opencv.
+# Part to build opendlv-device-camera-v4l.
 FROM pipill/armhf-alpine:edge as builder
 MAINTAINER Christian Berger "christian.berger@gu.se"
 
@@ -26,9 +26,14 @@ RUN echo http://dl-4.alpinelinux.org/alpine/edge/main > /etc/apk/repositories &&
     apk --no-cache add \
         cmake \
         g++ \
-        opencv \
-        opencv-dev \
+        git \
+        libx11-dev \
+        linux-headers \
         make
+RUN cd tmp && \
+    git clone --depth 1 https://chromium.googlesource.com/libyuv/libyuv && \
+    cd libyuv &&\
+    make -f linux.mk libyuv.a && cp libyuv.a /usr/lib && cd include && cp -r * /usr/include
 ADD . /opt/sources
 WORKDIR /opt/sources
 RUN mkdir build && \
@@ -39,7 +44,7 @@ RUN mkdir build && \
 RUN [ "cross-build-end" ]
 
 
-# Part to deploy opendlv-device-camera-opencv.
+# Part to deploy opendlv-device-camera-v4l.
 FROM pipill/armhf-alpine:edge
 MAINTAINER Christian Berger "christian.berger@gu.se"
 
@@ -50,13 +55,12 @@ RUN echo http://dl-4.alpinelinux.org/alpine/edge/main > /etc/apk/repositories &&
     echo http://dl-4.alpinelinux.org/alpine/edge/testing >> /etc/apk/repositories && \
     apk update && \
     apk --no-cache add \
-        opencv-libs \
-        libcanberra-gtk3
+        libx11
 
 RUN [ "cross-build-end" ]
 
 WORKDIR /usr/bin
-COPY --from=builder /tmp/bin/opendlv-device-camera-opencv .
+COPY --from=builder /tmp/bin/opendlv-device-camera-v4l .
 ENV NO_AT_BRIDGE=1
-ENTRYPOINT ["/usr/bin/opendlv-device-camera-opencv"]
+ENTRYPOINT ["/usr/bin/opendlv-device-camera-v4l"]
 
