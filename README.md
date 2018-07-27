@@ -42,7 +42,7 @@ To run this microservice using our pre-built Docker multi-arch images to open
 a Video4Linux-supported camera, simply start it as follows:
 
 ```
-docker run --rm -ti --init --ipc=host -v /tmp:/tmp -e DISPLAY=$DISPLAY --device /dev/video0 chalmersrevere/opendlv-device-camera-v4l-multi:v0.0.4 --camera=/dev/video0 --width=640 --height=480 --freq=20 --verbose
+docker run --rm -ti --init --ipc=host -v /tmp:/tmp -e DISPLAY=$DISPLAY --device /dev/video0 chalmersrevere/opendlv-device-camera-v4l-multi:v0.0.5 --camera=/dev/video0 --width=640 --height=480 --freq=20 --verbose
 ```
 
 ## Build from sources on the example of Ubuntu 16.04 LTS

@@ -32,6 +32,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -64,7 +65,7 @@ int32_t main(int32_t argc, char **argv) {
 
         const float FREQ{static_cast<float>(std::stof(commandlineArguments["freq"]))};
         if ( !(FREQ > 0) ) {
-            std::cerr << argv[0] << ": freq must be larger than 0; found " << FREQ << "." << std::endl;
+            std::cerr << "[opendlv-device-camera-v4l]: freq must be larger than 0; found " << FREQ << "." << std::endl;
             return retCode = 1;
         }
 
@@ -84,22 +85,22 @@ int32_t main(int32_t argc, char **argv) {
         // V4L initialization.
         int videoDevice = open(commandlineArguments["camera"].c_str(), O_RDWR);
         if (-1 == videoDevice) {
-            std::cerr << argv[0] << ": Failed to open capture device: " << commandlineArguments["camera"] << std::endl;
+            std::cerr << "[opendlv-device-camera-v4l]: Failed to open capture device: " << commandlineArguments["camera"] << std::endl;
             return retCode = 1;
         }
 
         struct v4l2_capability v4l2_cap;
         ::memset(&v4l2_cap, 0, sizeof(struct v4l2_capability));
         if (0 > ::ioctl(videoDevice, VIDIOC_QUERYCAP, &v4l2_cap)) {
-            std::cerr << argv[0] << ": Failed to query capture device: " << commandlineArguments["camera"] << std::endl;
+            std::cerr << "[opendlv-device-camera-v4l]: Failed to query capture device: " << commandlineArguments["camera"] << ", error: " << errno << ": " << strerror(errno) << std::endl;
             return retCode = 1;
         }
         if (!(v4l2_cap.capabilities & V4L2_CAP_VIDEO_CAPTURE)) {
-            std::cerr << argv[0] << ": Capture device: " << commandlineArguments["camera"] << " does not support V4L2_CAP_CAPTURE." << std::endl;
+            std::cerr << "[opendlv-device-camera-v4l]: Capture device: " << commandlineArguments["camera"] << " does not support V4L2_CAP_CAPTURE." << std::endl;
             return retCode = 1;
         }
         if (!(v4l2_cap.capabilities & V4L2_CAP_STREAMING)) {
-            std::cerr << argv[0] << ": Capture device: " << commandlineArguments["camera"] << " does not support V4L2_CAP_STREAMING." << std::endl;
+            std::cerr << "[opendlv-device-camera-v4l]: Capture device: " << commandlineArguments["camera"] << " does not support V4L2_CAP_STREAMING." << std::endl;
             return retCode = 1;
         }
 
@@ -113,24 +114,24 @@ int32_t main(int32_t argc, char **argv) {
         v4l2_fmt.fmt.pix.field = V4L2_FIELD_ANY;
 
         if (0 > ::ioctl(videoDevice, VIDIOC_S_FMT, &v4l2_fmt)) {
-            std::cerr << argv[0] << ": Capture device: " << commandlineArguments["camera"] << " does not support requested format." << std::endl;
+            std::cerr << "[opendlv-device-camera-v4l]: Capture device: " << commandlineArguments["camera"] << " does not support requested format." << ", error: " << errno << ": " << strerror(errno) << std::endl;
             return retCode = 1;
         }
 
         if ((v4l2_fmt.fmt.pix.width != WIDTH) ||
           (v4l2_fmt.fmt.pix.height != HEIGHT)) {
-            std::cerr << argv[0] << ": Capture device: " << commandlineArguments["camera"] << " does not support requested " << WIDTH << " x " << HEIGHT << std::endl;
+            std::cerr << "[opendlv-device-camera-v4l]: Capture device: " << commandlineArguments["camera"] << " does not support requested " << WIDTH << " x " << HEIGHT << std::endl;
             return retCode = 1;
         }
 
         bool isMJPEG{false};
         bool isYUYV422{false};
         if (v4l2_fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_MJPEG) {
-            std::clog << argv[0] << ": Capture device: " << commandlineArguments["camera"] << " provides MJPEG stream." << std::endl;
+            std::clog << "[opendlv-device-camera-v4l]: Capture device: " << commandlineArguments["camera"] << " provides MJPEG stream." << std::endl;
             isMJPEG = true;
         }
         if (v4l2_fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_YUYV) {
-            std::clog << argv[0] << ": Capture device: " << commandlineArguments["camera"] << " provides YUYV 4:2:2 stream." << std::endl;
+            std::clog << "[opendlv-device-camera-v4l]: Capture device: " << commandlineArguments["camera"] << " provides YUYV 4:2:2 stream." << std::endl;
             isYUYV422 = true;
         }
 
@@ -144,11 +145,11 @@ int32_t main(int32_t argc, char **argv) {
         if (0 > ::ioctl(videoDevice, VIDIOC_S_PARM, &v4l2_stream_parm) ||
           v4l2_stream_parm.parm.capture.timeperframe.numerator != 1 ||
           v4l2_stream_parm.parm.capture.timeperframe.denominator != static_cast<uint32_t>(FREQ)) {
-            std::cerr << argv[0] << ": Capture device: " << commandlineArguments["camera"] << " does not support requested " << FREQ << " fps." << std::endl;
+            std::cerr << "[opendlv-device-camera-v4l]: Capture device: " << commandlineArguments["camera"] << " does not support requested " << FREQ << " fps." << std::endl;
             return retCode = 1;
         }
 
-        const uint32_t BUFFER_COUNT{static_cast<uint32_t>(FREQ) + 10};
+        const uint32_t BUFFER_COUNT{32};
 
         struct v4l2_requestbuffers v4l2_req_bufs;
         ::memset(&v4l2_req_bufs, 0, sizeof(struct v4l2_requestbuffers));
@@ -156,7 +157,7 @@ int32_t main(int32_t argc, char **argv) {
         v4l2_req_bufs.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         v4l2_req_bufs.memory = V4L2_MEMORY_MMAP;
         if (0 > ::ioctl(videoDevice, VIDIOC_REQBUFS, &v4l2_req_bufs)) {
-            std::cerr << argv[0] << ": Could not allocate buffers for capture device: " << commandlineArguments["camera"] << std::endl;
+            std::cerr << "[opendlv-device-camera-v4l]: Could not allocate buffers for capture device: " << commandlineArguments["camera"] << ", error: " << errno << ": " << strerror(errno) << std::endl;
             return retCode = 1;
         }
 
@@ -174,7 +175,7 @@ int32_t main(int32_t argc, char **argv) {
             v4l2_buf.memory = V4L2_MEMORY_MMAP;
 
             if (0 > ::ioctl(videoDevice, VIDIOC_QUERYBUF, &v4l2_buf)) {
-                std::cerr << argv[0] << ": Could not query buffer " << i <<  " for capture device: " << commandlineArguments["camera"] << std::endl;
+                std::cerr << "[opendlv-device-camera-v4l]: Could not query buffer " << +i <<  " for capture device: " << commandlineArguments["camera"] << ", error: " << errno << ": " << strerror(errno) << std::endl;
                 return retCode = 1;
             }
 
@@ -182,7 +183,7 @@ int32_t main(int32_t argc, char **argv) {
 
             buffers[i].buf = mmap(0, buffers[i].length, PROT_READ, MAP_SHARED, videoDevice, v4l2_buf.m.offset);
             if (MAP_FAILED == buffers[i].buf) {
-                std::cerr << argv[0] << ": Could not map buffer " << i <<  " for capture device: " << commandlineArguments["camera"] << std::endl;
+                std::cerr << "[opendlv-device-camera-v4l]: Could not map buffer " << +i <<  " for capture device: " << commandlineArguments["camera"] << ", error: " << errno << ": " << strerror(errno) << std::endl;
                 return retCode = 1;
             }
         }
@@ -196,32 +197,32 @@ int32_t main(int32_t argc, char **argv) {
             v4l2_buf.memory = V4L2_MEMORY_MMAP;
 
             if (0 > ::ioctl(videoDevice, VIDIOC_QBUF, &v4l2_buf)) {
-                std::cerr << argv[0] << ": Could not queue buffer " << i <<  " for capture device: " << commandlineArguments["camera"] << std::endl;
+                std::cerr << "[opendlv-device-camera-v4l]: Could not queue buffer " << +i <<  " for capture device: " << commandlineArguments["camera"] << ", error: " << errno << ": " << strerror(errno) << std::endl;
                 return retCode = 1;
             }
         }
 
         int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         if (0 > ::ioctl(videoDevice, VIDIOC_STREAMON, &type)) {
-            std::cerr << argv[0] << ": Could not start video stream for capture device: " << commandlineArguments["camera"] << std::endl;
+            std::cerr << "[opendlv-device-camera-v4l]: Could not start video stream for capture device: " << commandlineArguments["camera"] << ", error: " << errno << ": " << strerror(errno) << std::endl;
             return retCode = 1;
         }
 
         std::unique_ptr<cluon::SharedMemory> sharedMemoryI420(new cluon::SharedMemory{NAME_I420, WIDTH * HEIGHT * 3/2});
         if (!sharedMemoryI420 || !sharedMemoryI420->valid()) {
-            std::cerr << argv[0] << ": Failed to create shared memory '" << NAME_I420 << "'." << std::endl;
+            std::cerr << "[opendlv-device-camera-v4l]: Failed to create shared memory '" << NAME_I420 << "'." << std::endl;
             return retCode = 1;
         }
 
         std::unique_ptr<cluon::SharedMemory> sharedMemoryARGB(new cluon::SharedMemory{NAME_ARGB, WIDTH * HEIGHT * 4});
         if (!sharedMemoryARGB || !sharedMemoryARGB->valid()) {
-            std::cerr << argv[0] << ": Failed to create shared memory '" << NAME_ARGB << "'." << std::endl;
+            std::cerr << "[opendlv-device-camera-v4l]: Failed to create shared memory '" << NAME_ARGB << "'." << std::endl;
             return retCode = 1;
         }
 
         if ( (sharedMemoryI420 && sharedMemoryI420->valid()) &&
              (sharedMemoryARGB && sharedMemoryARGB->valid()) ) {
-            std::clog << argv[0] << ": Data from camera '" << commandlineArguments["camera"]<< "' available in I420 format in shared memory '" << sharedMemoryI420->name() << "' (" << sharedMemoryI420->size() << ") and in ARGB format in shared memory '" << sharedMemoryARGB->name() << "' (" << sharedMemoryARGB->size() << ")." << std::endl;
+            std::clog << "[opendlv-device-camera-v4l]: Data from camera '" << commandlineArguments["camera"]<< "' available in I420 format in shared memory '" << sharedMemoryI420->name() << "' (" << sharedMemoryI420->size() << ") and in ARGB format in shared memory '" << sharedMemoryARGB->name() << "' (" << sharedMemoryARGB->size() << ")." << std::endl;
 
             // Define timeout for select system call.
             struct timeval timeout {};
@@ -258,7 +259,7 @@ int32_t main(int32_t argc, char **argv) {
                     v4l2_buf.memory = V4L2_MEMORY_MMAP;
 
                     if (0 > ::ioctl(videoDevice, VIDIOC_DQBUF, &v4l2_buf)) {
-                        std::cerr << argv[0] << ": Could not dequeue buffer for capture device: " << commandlineArguments["camera"] << std::endl;
+                        std::cerr << "[opendlv-device-camera-v4l]: Could not dequeue buffer for capture device: " << commandlineArguments["camera"] << ", error: " << errno << ": " << strerror(errno) << std::endl;
                         return false;
                     }
 
@@ -309,7 +310,7 @@ int32_t main(int32_t argc, char **argv) {
                     }
 
                     if (0 > ::ioctl(videoDevice, VIDIOC_QBUF, &v4l2_buf)) {
-                        std::cerr << argv[0] << ": Could not requeue buffer for capture device: " << commandlineArguments["camera"] << std::endl;
+                        std::cerr << "[opendlv-device-camera-v4l]: Could not requeue buffer for capture device: " << commandlineArguments["camera"] << ", error: " << errno << ": " << strerror(errno) << std::endl;
                         return false;
                     }
                 }
@@ -321,7 +322,7 @@ int32_t main(int32_t argc, char **argv) {
 
         type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         if (0 > ::ioctl(videoDevice, VIDIOC_STREAMOFF, &type)) {
-            std::cerr << argv[0] << ": Could not stop video stream for capture device: " << commandlineArguments["camera"] << std::endl;
+            std::cerr << "[opendlv-device-camera-v4l]: Could not stop video stream for capture device: " << commandlineArguments["camera"] << ", error: " << errno << ": " << strerror(errno) << std::endl;
             return retCode = 1;
         }
 
