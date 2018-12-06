@@ -22,6 +22,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/select.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <linux/videodev2.h>
@@ -224,6 +225,19 @@ int32_t main(int32_t argc, char **argv) {
              (sharedMemoryARGB && sharedMemoryARGB->valid()) ) {
             std::clog << "[opendlv-device-camera-v4l]: Data from camera '" << commandlineArguments["camera"]<< "' available in I420 format in shared memory '" << sharedMemoryI420->name() << "' (" << sharedMemoryI420->size() << ") and in ARGB format in shared memory '" << sharedMemoryARGB->name() << "' (" << sharedMemoryARGB->size() << ")." << std::endl;
 
+            int64_t uptimeToEpochOffsetIn_ms{0};
+            {
+                struct timeval epochTime{};
+                gettimeofday(&epochTime, nullptr);
+
+                struct timespec upTime{};
+                clock_gettime(CLOCK_MONOTONIC, &upTime);
+
+                int64_t uptimeIn_ms = upTime.tv_sec * 1000 + static_cast<int64_t>(round(upTime.tv_nsec/ 1000.0f*1000.0f));
+                int64_t epochTimeIn_ms =  epochTime.tv_sec * 1000  + static_cast<int64_t>(round(epochTime.tv_usec/1000.0f));
+                uptimeToEpochOffsetIn_ms = epochTimeIn_ms - uptimeIn_ms;
+            }
+
             // Define timeout for select system call.
             struct timeval timeout {};
             fd_set setOfFiledescriptorsToReadFrom{};
@@ -263,8 +277,12 @@ int32_t main(int32_t argc, char **argv) {
                         return false;
                     }
 
-                    cluon::data::TimeStamp ts;
-                    ts.seconds(v4l2_buf.timestamp.tv_sec).microseconds(v4l2_buf.timestamp.tv_usec/1000);
+                    cluon::data::TimeStamp ts{cluon::time::now()};
+                    if ( (v4l2_buf.flags & V4L2_BUF_FLAG_TIMESTAMP_MASK) == V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC ) {
+                        int64_t temp_ms = v4l2_buf.timestamp.tv_sec * 1000 + static_cast<int64_t>(round(v4l2_buf.timestamp.tv_usec/1000.0f));
+                        int64_t epochTimeStampIn_ms = temp_ms + uptimeToEpochOffsetIn_ms;
+                        ts = cluon::time::fromMicroseconds(epochTimeStampIn_ms*1000);
+                    }
 
                     const uint8_t bufferIndex = v4l2_buf.index;
                     const uint32_t bufferSize = v4l2_buf.bytesused;
