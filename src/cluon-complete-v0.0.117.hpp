@@ -1,6 +1,6 @@
 // This is an auto-generated header-only single-file distribution of libcluon.
-// Date: Mon, 13 Aug 2018 19:56:15 +0200
-// Version: 0.0.108
+// Date: Sat, 22 Dec 2018 22:54:42 +0100
+// Version: 0.0.117
 //
 //
 // Implementation of N4562 std::experimental::any (merged into C++17) for C++11 compilers.
@@ -506,8 +506,8 @@ namespace std
 
 namespace peg {
 
-#if __clang__ == 1 && __clang_major__ == 5 && __clang_minor__ == 0 && __clang_patchlevel__ == 0
-static void* enabler = nullptr; // workaround for Clang 5.0.0
+#if __clang__ == 1 && __clang_major__ <= 5
+static void* enabler = nullptr; // workaround for Clang version <= 5.0.0
 #else
 extern void* enabler;
 #endif
@@ -668,6 +668,213 @@ private:
 template <typename EF>
 auto make_scope_exit(EF&& exit_function) -> scope_exit<EF> {
     return scope_exit<typename std::remove_reference<EF>::type>(std::forward<EF>(exit_function));
+}
+
+/*-----------------------------------------------------------------------------
+ *  UTF8 functions
+ *---------------------------------------------------------------------------*/
+
+inline size_t codepoint_length(const char *s8, size_t l) {
+  if (l) {
+    auto b = static_cast<uint8_t>(s8[0]);
+    if ((b & 0x80) == 0) {
+      return 1;
+    } else if ((b & 0xE0) == 0xC0) {
+      return 2;
+    } else if ((b & 0xF0) == 0xE0) {
+      return 3;
+    } else if ((b & 0xF8) == 0xF0) {
+      return 4;
+    }
+  }
+  return 0;
+}
+
+inline size_t encode_codepoint(char32_t cp, char *buff) {
+  if (cp < 0x0080) {
+    buff[0] = static_cast<char>(cp & 0x7F);
+    return 1;
+  } else if (cp < 0x0800) {
+    buff[0] = static_cast<char>(0xC0 | ((cp >> 6) & 0x1F));
+    buff[1] = static_cast<char>(0x80 | (cp & 0x3F));
+    return 2;
+  } else if (cp < 0xD800) {
+    buff[0] = static_cast<char>(0xE0 | ((cp >> 12) & 0xF));
+    buff[1] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+    buff[2] = static_cast<char>(0x80 | (cp & 0x3F));
+    return 3;
+  } else if (cp < 0xE000) {
+    // D800 - DFFF is invalid...
+    return 0;
+  } else if (cp < 0x10000) {
+    buff[0] = static_cast<char>(0xE0 | ((cp >> 12) & 0xF));
+    buff[1] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+    buff[2] = static_cast<char>(0x80 | (cp & 0x3F));
+    return 3;
+  } else if (cp < 0x110000) {
+    buff[0] = static_cast<char>(0xF0 | ((cp >> 18) & 0x7));
+    buff[1] = static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+    buff[2] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+    buff[3] = static_cast<char>(0x80 | (cp & 0x3F));
+    return 4;
+  }
+  return 0;
+}
+
+inline std::string encode_codepoint(char32_t cp) {
+  char buff[4];
+  auto l = encode_codepoint(cp, buff);
+  return std::string(buff, l);
+}
+
+inline bool decode_codepoint(const char *s8, size_t l, size_t &bytes,
+                             char32_t &cp) {
+  if (l) {
+    auto b = static_cast<uint8_t>(s8[0]);
+    if ((b & 0x80) == 0) {
+      bytes = 1;
+      cp = b;
+      return true;
+    } else if ((b & 0xE0) == 0xC0) {
+      if (l >= 2) {
+        bytes = 2;
+        cp = ((static_cast<char32_t>(s8[0] & 0x1F)) << 6) |
+             (static_cast<char32_t>(s8[1] & 0x3F));
+        return true;
+      }
+    } else if ((b & 0xF0) == 0xE0) {
+      if (l >= 3) {
+        bytes = 3;
+        cp = ((static_cast<char32_t>(s8[0] & 0x0F)) << 12) |
+             ((static_cast<char32_t>(s8[1] & 0x3F)) << 6) |
+             (static_cast<char32_t>(s8[2] & 0x3F));
+        return true;
+      }
+    } else if ((b & 0xF8) == 0xF0) {
+      if (l >= 4) {
+        bytes = 4;
+        cp = ((static_cast<char32_t>(s8[0] & 0x07)) << 18) |
+             ((static_cast<char32_t>(s8[1] & 0x3F)) << 12) |
+             ((static_cast<char32_t>(s8[2] & 0x3F)) << 6) |
+             (static_cast<char32_t>(s8[3] & 0x3F));
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+inline size_t decode_codepoint(const char *s8, size_t l, char32_t &out) {
+  size_t bytes;
+  if (decode_codepoint(s8, l, bytes, out)) {
+    return bytes;
+  }
+  return 0;
+}
+
+inline char32_t decode_codepoint(const char *s8, size_t l) {
+  char32_t out = 0;
+  decode_codepoint(s8, l, out);
+  return out;
+}
+
+inline std::u32string decode(const char *s8, size_t l) {
+  std::u32string out;
+  size_t i = 0;
+  while (i < l) {
+    auto beg = i++;
+    while (i < l && (s8[i] & 0xc0) == 0x80) {
+      i++;
+    }
+    out += decode_codepoint(&s8[beg], (i - beg));
+  }
+  return out;
+}
+
+/*-----------------------------------------------------------------------------
+ *  resolve_escape_sequence
+ *---------------------------------------------------------------------------*/
+
+inline bool is_hex(char c, int& v) {
+    if ('0' <= c && c <= '9') {
+        v = c - '0';
+        return true;
+    } else if ('a' <= c && c <= 'f') {
+        v = c - 'a' + 10;
+        return true;
+    } else if ('A' <= c && c <= 'F') {
+        v = c - 'A' + 10;
+        return true;
+    }
+    return false;
+}
+
+inline bool is_digit(char c, int& v) {
+    if ('0' <= c && c <= '9') {
+        v = c - '0';
+        return true;
+    }
+    return false;
+}
+
+inline std::pair<int, size_t> parse_hex_number(const char* s, size_t n, size_t i) {
+    int ret = 0;
+    int val;
+    while (i < n && is_hex(s[i], val)) {
+        ret = static_cast<int>(ret * 16 + val);
+        i++;
+    }
+    return std::make_pair(ret, i);
+}
+
+inline std::pair<int, size_t> parse_octal_number(const char* s, size_t n, size_t i) {
+    int ret = 0;
+    int val;
+    while (i < n && is_digit(s[i], val)) {
+        ret = static_cast<int>(ret * 8 + val);
+        i++;
+    }
+    return std::make_pair(ret, i);
+}
+
+inline std::string resolve_escape_sequence(const char* s, size_t n) {
+    std::string r;
+    r.reserve(n);
+
+    size_t i = 0;
+    while (i < n) {
+        auto ch = s[i];
+        if (ch == '\\') {
+            i++;
+            switch (s[i]) {
+                case 'n':  r += '\n'; i++; break;
+                case 'r':  r += '\r'; i++; break;
+                case 't':  r += '\t'; i++; break;
+                case '\'': r += '\''; i++; break;
+                case '"':  r += '"';  i++; break;
+                case '[':  r += '[';  i++; break;
+                case ']':  r += ']';  i++; break;
+                case '\\': r += '\\'; i++; break;
+                case 'x':
+                case 'u': {
+                    char32_t cp;
+                    std::tie(cp, i) = parse_hex_number(s, n, i + 1);
+                    r += encode_codepoint(cp);
+                    break;
+                }
+                default: {
+                    char32_t cp;
+                    std::tie(cp, i) = parse_octal_number(s, n, i);
+                    r += encode_codepoint(cp);
+                    break;
+                }
+            }
+        } else {
+            r += ch;
+            i++;
+        }
+    }
+    return r;
 }
 
 /*-----------------------------------------------------------------------------
@@ -962,6 +1169,7 @@ public:
 
     std::vector<std::shared_ptr<SemanticValues>> value_stack;
     size_t                                       value_stack_size;
+    std::vector<std::vector<std::shared_ptr<Ope>>> args_stack;
 
     size_t                                       nest_level;
 
@@ -972,7 +1180,7 @@ public:
 
     std::shared_ptr<Ope>                         wordOpe;
 
-    std::unordered_map<std::string, std::string> captures;
+    std::vector<std::unordered_map<std::string, std::string>> capture_scope_stack;
 
     const size_t                                 def_count;
     const bool                                   enablePackratParsing;
@@ -1009,6 +1217,8 @@ public:
         , cache_success(enablePackratParsing ? def_count * (l + 1) : 0)
         , tracer(a_tracer)
     {
+        args_stack.resize(1);
+        capture_scope_stack.resize(1);
     }
 
     template <typename T>
@@ -1061,6 +1271,35 @@ public:
 
     void pop() {
         value_stack_size--;
+    }
+
+    void push_args(const std::vector<std::shared_ptr<Ope>>& args) {
+        args_stack.push_back(args);
+    }
+
+    void pop_args() {
+        args_stack.pop_back();
+    }
+
+    const std::vector<std::shared_ptr<Ope>>& top_args() const {
+        return args_stack[args_stack.size() - 1];
+    }
+
+    void push_capture_scope() {
+        capture_scope_stack.resize(capture_scope_stack.size() + 1);
+    }
+
+    void pop_capture_scope() {
+        capture_scope_stack.pop_back();
+    }
+
+    void shift_capture_values() {
+        assert(capture_scope_stack.size() >= 2);
+        auto it = capture_scope_stack.rbegin();
+        auto it_prev = it + 1;
+        for (const auto& kv: *it) {
+            (*it_prev)[kv.first] = kv.second;
+        }
     }
 
     void set_error_pos(const char* a_s) {
@@ -1158,9 +1397,11 @@ public:
         for (const auto& ope : opes_) {
             c.nest_level++;
             auto& chldsv = c.push();
+            c.push_capture_scope();
             auto se = make_scope_exit([&]() {
                 c.nest_level--;
                 c.pop();
+                c.pop_capture_scope();
             });
             const auto& rule = *ope;
             auto len = rule.parse(s, n, chldsv, c, dt);
@@ -1172,6 +1413,8 @@ public:
                 sv.n_ = chldsv.length();
                 sv.choice_ = id;
                 sv.tokens.insert(sv.tokens.end(), chldsv.tokens.begin(), chldsv.tokens.end());
+
+                c.shift_capture_values();
                 return len;
             }
             id++;
@@ -1197,12 +1440,18 @@ public:
         size_t i = 0;
         while (n - i > 0) {
             c.nest_level++;
-            auto se = make_scope_exit([&]() { c.nest_level--; });
+            c.push_capture_scope();
+            auto se = make_scope_exit([&]() {
+                c.nest_level--;
+                c.pop_capture_scope();
+            });
             auto save_sv_size = sv.size();
             auto save_tok_size = sv.tokens.size();
             const auto& rule = *ope_;
             auto len = rule.parse(s + i, n - i, sv, c, dt);
-            if (fail(len)) {
+            if (success(len)) {
+                c.shift_capture_values();
+            } else {
                 if (sv.size() != save_sv_size) {
                     sv.erase(sv.begin() + static_cast<std::ptrdiff_t>(save_sv_size));
                 }
@@ -1232,10 +1481,16 @@ public:
         size_t len = 0;
         {
             c.nest_level++;
-            auto se = make_scope_exit([&]() { c.nest_level--; });
+            c.push_capture_scope();
+            auto se = make_scope_exit([&]() {
+                c.nest_level--;
+                c.pop_capture_scope();
+            });
             const auto& rule = *ope_;
             len = rule.parse(s, n, sv, c, dt);
-            if (fail(len)) {
+            if (success(len)) {
+                c.shift_capture_values();
+            } else {
                 return static_cast<size_t>(-1);
             }
         }
@@ -1243,12 +1498,18 @@ public:
         auto i = len;
         while (n - i > 0) {
             c.nest_level++;
-            auto se = make_scope_exit([&]() { c.nest_level--; });
+            c.push_capture_scope();
+            auto se = make_scope_exit([&]() {
+                c.nest_level--;
+                c.pop_capture_scope();
+            });
             auto save_sv_size = sv.size();
             auto save_tok_size = sv.tokens.size();
             const auto& rule = *ope_;
             len = rule.parse(s + i, n - i, sv, c, dt);
-            if (fail(len)) {
+            if (success(len)) {
+                c.shift_capture_values();
+            } else {
                 if (sv.size() != save_sv_size) {
                     sv.erase(sv.begin() + static_cast<std::ptrdiff_t>(save_sv_size));
                 }
@@ -1279,10 +1540,15 @@ public:
         c.nest_level++;
         auto save_sv_size = sv.size();
         auto save_tok_size = sv.tokens.size();
-        auto se = make_scope_exit([&]() { c.nest_level--; });
+        c.push_capture_scope();
+        auto se = make_scope_exit([&]() {
+            c.nest_level--;
+            c.pop_capture_scope();
+        });
         const auto& rule = *ope_;
         auto len = rule.parse(s, n, sv, c, dt);
         if (success(len)) {
+            c.shift_capture_values();
             return len;
         } else {
             if (sv.size() != save_sv_size) {
@@ -1310,9 +1576,11 @@ public:
         c.trace("AndPredicate", s, n, sv, dt);
         c.nest_level++;
         auto& chldsv = c.push();
+        c.push_capture_scope();
         auto se = make_scope_exit([&]() {
             c.nest_level--;
             c.pop();
+            c.pop_capture_scope();
         });
         const auto& rule = *ope_;
         auto len = rule.parse(s, n, chldsv, c, dt);
@@ -1338,9 +1606,11 @@ public:
         auto save_error_pos = c.error_pos;
         c.nest_level++;
         auto& chldsv = c.push();
+        c.push_capture_scope();
         auto se = make_scope_exit([&]() {
             c.nest_level--;
             c.pop();
+            c.pop_capture_scope();
         });
         const auto& rule = *ope_;
         auto len = rule.parse(s, n, chldsv, c, dt);
@@ -1359,6 +1629,7 @@ public:
 };
 
 class LiteralString : public Ope
+    , public std::enable_shared_from_this<LiteralString>
 {
 public:
     LiteralString(const std::string& s)
@@ -1377,49 +1648,64 @@ public:
 };
 
 class CharacterClass : public Ope
+    , public std::enable_shared_from_this<CharacterClass>
 {
 public:
-    CharacterClass(const std::string& chars) : chars_(chars) {}
+    CharacterClass(const std::string& s) {
+        auto chars = decode(s.c_str(), s.length());
+        auto i = 0u;
+        while (i < chars.size()) {
+            if (i + 2 < chars.size() && chars[i + 1] == '-') {
+                auto cp1 = chars[i];
+                auto cp2 = chars[i + 2];
+                ranges_.emplace_back(std::make_pair(cp1, cp2));
+                i += 3;
+            } else {
+                auto cp = chars[i];
+                ranges_.emplace_back(std::make_pair(cp, cp));
+                i += 1;
+            }
+        }
+    }
+
+    CharacterClass(const std::vector<std::pair<char32_t, char32_t>>& ranges) : ranges_(ranges) {}
 
     size_t parse(const char* s, size_t n, SemanticValues& sv, Context& c, any& dt) const override {
         c.trace("CharacterClass", s, n, sv, dt);
-        // TODO: UTF8 support
+
         if (n < 1) {
             c.set_error_pos(s);
             return static_cast<size_t>(-1);
         }
-        auto ch = s[0];
-        auto i = 0u;
-        while (i < chars_.size()) {
-            if (i + 2 < chars_.size() && chars_[i + 1] == '-') {
-                if (chars_[i] <= ch && ch <= chars_[i + 2]) {
-                    return 1;
+
+        char32_t cp;
+        auto len = decode_codepoint(s, n, cp);
+
+        if (!ranges_.empty()) {
+            for (const auto& range: ranges_) {
+                if (range.first <= cp && cp <= range.second) {
+                    return len;
                 }
-                i += 3;
-            } else {
-                if (chars_[i] == ch) {
-                    return 1;
-                }
-                i += 1;
             }
         }
+
         c.set_error_pos(s);
         return static_cast<size_t>(-1);
     }
 
     void accept(Visitor& v) override;
 
-    std::string chars_;
+    std::vector<std::pair<char32_t, char32_t>> ranges_;
 };
 
 class Character : public Ope
+    , public std::enable_shared_from_this<Character>
 {
 public:
     Character(char ch) : ch_(ch) {}
 
     size_t parse(const char* s, size_t n, SemanticValues& sv, Context& c, any& dt) const override {
         c.trace("Character", s, n, sv, dt);
-        // TODO: UTF8 support
         if (n < 1 || s[0] != ch_) {
             c.set_error_pos(s);
             return static_cast<size_t>(-1);
@@ -1433,19 +1719,41 @@ public:
 };
 
 class AnyCharacter : public Ope
+    , public std::enable_shared_from_this<AnyCharacter>
 {
 public:
     size_t parse(const char* s, size_t n, SemanticValues& sv, Context& c, any& dt) const override {
         c.trace("AnyCharacter", s, n, sv, dt);
-        // TODO: UTF8 support
-        if (n < 1) {
+        auto len = codepoint_length(s, n);
+        if (len < 1) {
             c.set_error_pos(s);
             return static_cast<size_t>(-1);
         }
-        return 1;
+        return len;
     }
 
     void accept(Visitor& v) override;
+};
+
+class CaptureScope : public Ope
+{
+public:
+    CaptureScope(const std::shared_ptr<Ope>& ope)
+        : ope_(ope) {}
+
+    size_t parse(const char* s, size_t n, SemanticValues& sv, Context& c, any& dt) const override {
+        c.push_capture_scope();
+        auto se = make_scope_exit([&]() {
+            c.pop_capture_scope();
+        });
+        const auto& rule = *ope_;
+        auto len = rule.parse(s, n, sv, c, dt);
+        return len;
+    }
+
+    void accept(Visitor& v) override;
+
+    std::shared_ptr<Ope> ope_;
 };
 
 class Capture : public Ope
@@ -1468,9 +1776,7 @@ public:
     void accept(Visitor& v) override;
 
     std::shared_ptr<Ope> ope_;
-
-private:
-    MatchAction match_action_;
+    MatchAction          match_action_;
 };
 
 class TokenBoundary : public Ope
@@ -1505,6 +1811,19 @@ public:
 };
 
 typedef std::function<size_t (const char* s, size_t n, SemanticValues& sv, any& dt)> Parser;
+
+class User : public Ope
+{
+public:
+    User(Parser fn) : fn_(fn) {}
+     size_t parse(const char* s, size_t n, SemanticValues& sv, Context& c, any& dt) const override {
+        c.trace("User", s, n, sv, dt);
+        assert(fn_);
+        return fn_(s, n, sv, dt);
+    }
+     void accept(Visitor& v) override;
+     std::function<size_t (const char* s, size_t n, SemanticValues& sv, any& dt)> fn_;
+};
 
 class WeakHolder : public Ope
 {
@@ -1541,28 +1860,42 @@ public:
     friend class Definition;
 };
 
-class DefinitionReference : public Ope
+typedef std::unordered_map<std::string, Definition> Grammar;
+
+class Reference : public Ope
+    , public std::enable_shared_from_this<Reference>
 {
 public:
-    DefinitionReference(
-        const std::unordered_map<std::string, Definition>& grammar, const std::string& name, const char* s)
+    Reference(
+        const Grammar& grammar,
+        const std::string& name,
+        const char* s,
+        bool is_macro,
+        const std::vector<std::shared_ptr<Ope>>& args)
         : grammar_(grammar)
         , name_(name)
-        , s_(s) {}
+        , s_(s)
+        , is_macro_(is_macro)
+        , args_(args)
+        , rule_(nullptr)
+        , iarg_(0)
+        {}
 
     size_t parse(const char* s, size_t n, SemanticValues& sv, Context& c, any& dt) const override;
 
     void accept(Visitor& v) override;
 
-    std::shared_ptr<Ope> get_rule() const;
+    std::shared_ptr<Ope> get_core_operator() const;
 
-    const std::unordered_map<std::string, Definition>& grammar_;
-    const std::string                                  name_;
-    const char*                                        s_;
+    const Grammar&    grammar_;
+    const std::string name_;
+    const char*       s_;
 
-private:
-    mutable std::once_flag                             init_;
-    mutable std::shared_ptr<Ope>                       rule_;
+    const bool is_macro_;
+    const std::vector<std::shared_ptr<Ope>> args_;
+
+    Definition* rule_;
+    size_t iarg_;
 };
 
 class Whitespace : public Ope
@@ -1598,6 +1931,91 @@ public:
 };
 
 /*
+ * Factories
+ */
+template <typename... Args>
+std::shared_ptr<Ope> seq(Args&& ...args) {
+    return std::make_shared<Sequence>(static_cast<std::shared_ptr<Ope>>(args)...);
+}
+
+template <typename... Args>
+std::shared_ptr<Ope> cho(Args&& ...args) {
+    return std::make_shared<PrioritizedChoice>(static_cast<std::shared_ptr<Ope>>(args)...);
+}
+
+inline std::shared_ptr<Ope> zom(const std::shared_ptr<Ope>& ope) {
+    return std::make_shared<ZeroOrMore>(ope);
+}
+
+inline std::shared_ptr<Ope> oom(const std::shared_ptr<Ope>& ope) {
+    return std::make_shared<OneOrMore>(ope);
+}
+
+inline std::shared_ptr<Ope> opt(const std::shared_ptr<Ope>& ope) {
+    return std::make_shared<Option>(ope);
+}
+
+inline std::shared_ptr<Ope> apd(const std::shared_ptr<Ope>& ope) {
+    return std::make_shared<AndPredicate>(ope);
+}
+
+inline std::shared_ptr<Ope> npd(const std::shared_ptr<Ope>& ope) {
+    return std::make_shared<NotPredicate>(ope);
+}
+
+inline std::shared_ptr<Ope> lit(const std::string& lit) {
+    return std::make_shared<LiteralString>(lit);
+}
+
+inline std::shared_ptr<Ope> cls(const std::string& s) {
+    return std::make_shared<CharacterClass>(s);
+}
+
+inline std::shared_ptr<Ope> cls(const std::vector<std::pair<char32_t, char32_t>>& ranges) {
+    return std::make_shared<CharacterClass>(ranges);
+}
+
+inline std::shared_ptr<Ope> chr(char dt) {
+    return std::make_shared<Character>(dt);
+}
+
+inline std::shared_ptr<Ope> dot() {
+    return std::make_shared<AnyCharacter>();
+}
+
+inline std::shared_ptr<Ope> csc(const std::shared_ptr<Ope>& ope) {
+    return std::make_shared<CaptureScope>(ope);
+}
+
+inline std::shared_ptr<Ope> cap(const std::shared_ptr<Ope>& ope, Capture::MatchAction ma) {
+    return std::make_shared<Capture>(ope, ma);
+}
+
+inline std::shared_ptr<Ope> tok(const std::shared_ptr<Ope>& ope) {
+    return std::make_shared<TokenBoundary>(ope);
+}
+
+inline std::shared_ptr<Ope> ign(const std::shared_ptr<Ope>& ope) {
+    return std::make_shared<Ignore>(ope);
+}
+
+inline std::shared_ptr<Ope> usr(std::function<size_t (const char* s, size_t n, SemanticValues& sv, any& dt)> fn) {
+    return std::make_shared<User>(fn);
+}
+
+inline std::shared_ptr<Ope> ref(const Grammar& grammar, const std::string& name, const char* s, bool is_macro, const std::vector<std::shared_ptr<Ope>>& args) {
+    return std::make_shared<Reference>(grammar, name, s, is_macro, args);
+}
+
+inline std::shared_ptr<Ope> wsp(const std::shared_ptr<Ope>& ope) {
+    return std::make_shared<Whitespace>(std::make_shared<Ignore>(ope));
+}
+
+inline std::shared_ptr<Ope> bkr(const std::string& name) {
+    return std::make_shared<BackReference>(name);
+}
+
+/*
  * Visitor
  */
 struct Ope::Visitor
@@ -1614,12 +2032,14 @@ struct Ope::Visitor
     virtual void visit(CharacterClass& /*ope*/) {}
     virtual void visit(Character& /*ope*/) {}
     virtual void visit(AnyCharacter& /*ope*/) {}
+    virtual void visit(CaptureScope& /*ope*/) {}
     virtual void visit(Capture& /*ope*/) {}
     virtual void visit(TokenBoundary& /*ope*/) {}
     virtual void visit(Ignore& /*ope*/) {}
+    virtual void visit(User& /*ope*/) {}
     virtual void visit(WeakHolder& /*ope*/) {}
     virtual void visit(Holder& /*ope*/) {}
-    virtual void visit(DefinitionReference& /*ope*/) {}
+    virtual void visit(Reference& /*ope*/) {}
     virtual void visit(Whitespace& /*ope*/) {}
     virtual void visit(BackReference& /*ope*/) {}
 };
@@ -1643,19 +2063,21 @@ struct AssignIDToDefinition : public Ope::Visitor
     void visit(Option& ope) override { ope.ope_->accept(*this); }
     void visit(AndPredicate& ope) override { ope.ope_->accept(*this); }
     void visit(NotPredicate& ope) override { ope.ope_->accept(*this); }
+    void visit(CaptureScope& ope) override { ope.ope_->accept(*this); }
     void visit(Capture& ope) override { ope.ope_->accept(*this); }
     void visit(TokenBoundary& ope) override { ope.ope_->accept(*this); }
     void visit(Ignore& ope) override { ope.ope_->accept(*this); }
     void visit(WeakHolder& ope) override { ope.weak_.lock()->accept(*this); }
     void visit(Holder& ope) override;
-    void visit(DefinitionReference& ope) override { ope.get_rule()->accept(*this); }
+    void visit(Reference& ope) override;
+    void visit(Whitespace& ope) override { ope.ope_->accept(*this); }
 
     std::unordered_map<void*, size_t> ids;
 };
 
-struct IsToken : public Ope::Visitor
+struct TokenChecker : public Ope::Visitor
 {
-    IsToken() : has_token_boundary(false), has_rule(false) {}
+    TokenChecker() : has_token_boundary_(false), has_rule_(false) {}
 
     using Ope::Visitor::visit;
 
@@ -1672,20 +2094,206 @@ struct IsToken : public Ope::Visitor
     void visit(ZeroOrMore& ope) override { ope.ope_->accept(*this); }
     void visit(OneOrMore& ope) override { ope.ope_->accept(*this); }
     void visit(Option& ope) override { ope.ope_->accept(*this); }
+    void visit(CaptureScope& ope) override { ope.ope_->accept(*this); }
     void visit(Capture& ope) override { ope.ope_->accept(*this); }
-    void visit(TokenBoundary& /*ope*/) override { has_token_boundary = true; }
+    void visit(TokenBoundary& /*ope*/) override { has_token_boundary_ = true; }
     void visit(Ignore& ope) override { ope.ope_->accept(*this); }
     void visit(WeakHolder& ope) override { ope.weak_.lock()->accept(*this); }
-    void visit(DefinitionReference& /*ope*/) override { has_rule = true; }
+    void visit(Reference& ope) override;
+    void visit(Whitespace& ope) override { ope.ope_->accept(*this); }
 
     bool is_token() const {
-        return has_token_boundary || !has_rule;
+        return has_token_boundary_ || !has_rule_;
     }
 
-    bool has_token_boundary;
-    bool has_rule;
+private:
+    bool has_token_boundary_;
+    bool has_rule_;
 };
 
+struct DetectLeftRecursion : public Ope::Visitor {
+    DetectLeftRecursion(const std::string& name)
+        : error_s(nullptr), name_(name), done_(false) {}
+
+    using Ope::Visitor::visit;
+
+    void visit(Sequence& ope) override {
+        for (auto op: ope.opes_) {
+            op->accept(*this);
+            if (done_) {
+                break;
+            } else if (error_s) {
+                done_ = true;
+                break;
+            }
+        }
+    }
+    void visit(PrioritizedChoice& ope) override {
+        for (auto op: ope.opes_) {
+            op->accept(*this);
+            if (error_s) {
+                done_ = true;
+                break;
+            }
+        }
+    }
+    void visit(ZeroOrMore& ope) override { ope.ope_->accept(*this); done_ = false; }
+    void visit(OneOrMore& ope) override { ope.ope_->accept(*this); done_ = true; }
+    void visit(Option& ope) override { ope.ope_->accept(*this); done_ = false; }
+    void visit(AndPredicate& ope) override { ope.ope_->accept(*this); done_ = false; }
+    void visit(NotPredicate& ope) override { ope.ope_->accept(*this); done_ = false; }
+    void visit(LiteralString& ope) override { done_ = !ope.lit_.empty(); }
+    void visit(CharacterClass& /*ope*/) override { done_ = true; }
+    void visit(Character& /*ope*/) override { done_ = true; }
+    void visit(AnyCharacter& /*ope*/) override { done_ = true; }
+    void visit(CaptureScope& ope) override { ope.ope_->accept(*this); }
+    void visit(Capture& ope) override { ope.ope_->accept(*this); }
+    void visit(TokenBoundary& ope) override { ope.ope_->accept(*this); }
+    void visit(Ignore& ope) override { ope.ope_->accept(*this); }
+    void visit(User& /*ope*/) override { done_ = true; }
+    void visit(WeakHolder& ope) override { ope.weak_.lock()->accept(*this); }
+    void visit(Holder& ope) override { ope.ope_->accept(*this); }
+    void visit(Reference& ope) override;
+    void visit(Whitespace& ope) override { ope.ope_->accept(*this); }
+    void visit(BackReference& /*ope*/) override { done_ = true; }
+
+    const char* error_s;
+
+private:
+    std::string           name_;
+    std::set<std::string> refs_;
+    bool                  done_;
+};
+
+struct ReferenceChecker : public Ope::Visitor {
+    ReferenceChecker(
+        const Grammar& grammar,
+        const std::vector<std::string>& params)
+        : grammar_(grammar), params_(params) {}
+
+    using Ope::Visitor::visit;
+
+    void visit(Sequence& ope) override {
+        for (auto op: ope.opes_) {
+            op->accept(*this);
+        }
+    }
+    void visit(PrioritizedChoice& ope) override {
+        for (auto op: ope.opes_) {
+            op->accept(*this);
+        }
+    }
+    void visit(ZeroOrMore& ope) override { ope.ope_->accept(*this); }
+    void visit(OneOrMore& ope) override { ope.ope_->accept(*this); }
+    void visit(Option& ope) override { ope.ope_->accept(*this); }
+    void visit(AndPredicate& ope) override { ope.ope_->accept(*this); }
+    void visit(NotPredicate& ope) override { ope.ope_->accept(*this); }
+    void visit(CaptureScope& ope) override { ope.ope_->accept(*this); }
+    void visit(Capture& ope) override { ope.ope_->accept(*this); }
+    void visit(TokenBoundary& ope) override { ope.ope_->accept(*this); }
+    void visit(Ignore& ope) override { ope.ope_->accept(*this); }
+    void visit(WeakHolder& ope) override { ope.weak_.lock()->accept(*this); }
+    void visit(Holder& ope) override { ope.ope_->accept(*this); }
+    void visit(Reference& ope) override;
+    void visit(Whitespace& ope) override { ope.ope_->accept(*this); }
+
+    std::unordered_map<std::string, const char*> error_s;
+    std::unordered_map<std::string, std::string> error_message;
+
+private:
+    const Grammar& grammar_;
+    const std::vector<std::string>& params_;
+};
+
+struct LinkReferences : public Ope::Visitor {
+    LinkReferences(
+        Grammar& grammar,
+        const std::vector<std::string>& params)
+        : grammar_(grammar), params_(params) {}
+
+    using Ope::Visitor::visit;
+
+    void visit(Sequence& ope) override {
+        for (auto op: ope.opes_) {
+            op->accept(*this);
+        }
+    }
+    void visit(PrioritizedChoice& ope) override {
+        for (auto op: ope.opes_) {
+            op->accept(*this);
+        }
+    }
+    void visit(ZeroOrMore& ope) override { ope.ope_->accept(*this); }
+    void visit(OneOrMore& ope) override { ope.ope_->accept(*this); }
+    void visit(Option& ope) override { ope.ope_->accept(*this); }
+    void visit(AndPredicate& ope) override { ope.ope_->accept(*this); }
+    void visit(NotPredicate& ope) override { ope.ope_->accept(*this); }
+    void visit(CaptureScope& ope) override { ope.ope_->accept(*this); }
+    void visit(Capture& ope) override { ope.ope_->accept(*this); }
+    void visit(TokenBoundary& ope) override { ope.ope_->accept(*this); }
+    void visit(Ignore& ope) override { ope.ope_->accept(*this); }
+    void visit(WeakHolder& ope) override { ope.weak_.lock()->accept(*this); }
+    void visit(Holder& ope) override { ope.ope_->accept(*this); }
+    void visit(Reference& ope) override;
+    void visit(Whitespace& ope) override { ope.ope_->accept(*this); }
+
+private:
+    Grammar& grammar_;
+    const std::vector<std::string>& params_;
+};
+
+struct FindReference : public Ope::Visitor {
+    FindReference(
+        const std::vector<std::shared_ptr<Ope>>& args,
+        const std::vector<std::string>& params)
+        : args_(args), params_(params) {}
+
+    using Ope::Visitor::visit;
+
+    void visit(Sequence& ope) override {
+        std::vector<std::shared_ptr<Ope>> opes;
+        for (auto o: ope.opes_) {
+            o->accept(*this);
+            opes.push_back(found_ope);
+        }
+        found_ope = std::make_shared<Sequence>(opes);
+    }
+    void visit(PrioritizedChoice& ope) override {
+        std::vector<std::shared_ptr<Ope>> opes;
+        for (auto o: ope.opes_) {
+            o->accept(*this);
+            opes.push_back(found_ope);
+        }
+        found_ope = std::make_shared<PrioritizedChoice>(opes);
+    }
+    void visit(ZeroOrMore& ope) override { ope.ope_->accept(*this); found_ope = zom(found_ope); }
+    void visit(OneOrMore& ope) override { ope.ope_->accept(*this); found_ope = oom(found_ope); }
+    void visit(Option& ope) override { ope.ope_->accept(*this); found_ope = opt(found_ope); }
+    void visit(AndPredicate& ope) override { ope.ope_->accept(*this); found_ope = apd(found_ope); }
+    void visit(NotPredicate& ope) override { ope.ope_->accept(*this); found_ope = npd(found_ope); }
+    void visit(LiteralString& ope) override { found_ope = ope.shared_from_this(); }
+    void visit(CharacterClass& ope) override { found_ope = ope.shared_from_this(); }
+    void visit(Character& ope) override { found_ope = ope.shared_from_this(); }
+    void visit(AnyCharacter& ope) override { found_ope = ope.shared_from_this(); }
+    void visit(CaptureScope& ope) override { ope.ope_->accept(*this); found_ope = csc(found_ope); }
+    void visit(Capture& ope) override { ope.ope_->accept(*this); found_ope = cap(found_ope, ope.match_action_); }
+    void visit(TokenBoundary& ope) override { ope.ope_->accept(*this); found_ope = tok(found_ope); }
+    void visit(Ignore& ope) override { ope.ope_->accept(*this); found_ope = ign(found_ope); }
+    void visit(WeakHolder& ope) override { ope.weak_.lock()->accept(*this); }
+    void visit(Holder& ope) override { ope.ope_->accept(*this); }
+    void visit(Reference& ope) override;
+    void visit(Whitespace& ope) override { ope.ope_->accept(*this); found_ope = wsp(found_ope); }
+
+    std::shared_ptr<Ope> found_ope;
+
+private:
+    const std::vector<std::shared_ptr<Ope>>& args_;
+    const std::vector<std::string>& params_;
+};
+
+/*
+ * Keywords
+ */
 static const char* WHITESPACE_DEFINITION_NAME = "%whitespace";
 static const char* WORD_DEFINITION_NAME = "%word";
 
@@ -1706,17 +2314,17 @@ public:
     Definition()
         : ignoreSemanticValue(false)
         , enablePackratParsing(false)
-        , is_token(false)
-        , has_token_boundary(false)
-        , holder_(std::make_shared<Holder>(this)) {}
+        , is_macro(false)
+        , holder_(std::make_shared<Holder>(this))
+        , is_token_(false) {}
 
     Definition(const Definition& rhs)
         : name(rhs.name)
         , ignoreSemanticValue(false)
         , enablePackratParsing(false)
-        , is_token(false)
-        , has_token_boundary(false)
+        , is_macro(false)
         , holder_(rhs.holder_)
+        , is_token_(false)
     {
         holder_->outer_ = this;
     }
@@ -1727,9 +2335,9 @@ public:
         , whitespaceOpe(rhs.whitespaceOpe)
         , wordOpe(rhs.wordOpe)
         , enablePackratParsing(rhs.enablePackratParsing)
-        , is_token(rhs.is_token)
-        , has_token_boundary(rhs.has_token_boundary)
+        , is_macro(rhs.is_macro)
         , holder_(std::move(rhs.holder_))
+        , is_token_(rhs.is_token_)
     {
         holder_->outer_ = this;
     }
@@ -1737,9 +2345,9 @@ public:
     Definition(const std::shared_ptr<Ope>& ope)
         : ignoreSemanticValue(false)
         , enablePackratParsing(false)
-        , is_token(false)
-        , has_token_boundary(false)
+        , is_macro(false)
         , holder_(std::make_shared<Holder>(this))
+        , is_token_(false)
     {
         *this <= ope;
     }
@@ -1749,13 +2357,7 @@ public:
     }
 
     Definition& operator<=(const std::shared_ptr<Ope>& ope) {
-        IsToken isToken;
-        ope->accept(isToken);
-        is_token = isToken.is_token();
-        has_token_boundary = isToken.has_token_boundary;
-
         holder_->ope_ = ope;
-
         return *this;
     }
 
@@ -1813,9 +2415,9 @@ public:
         return parse_and_get_value(s, n, dt, val, path);
     }
 
-    Definition& operator=(Action a) {
+    Action operator=(Action a) {
         action = a;
-        return *this;
+        return a;
     }
 
     template <typename T>
@@ -1833,45 +2435,62 @@ public:
         holder_->accept(v);
     }
 
-    std::shared_ptr<Ope> get_core_operator() {
+    std::shared_ptr<Ope> get_core_operator() const {
         return holder_->ope_;
     }
 
-    std::string                    name;
-    size_t                         id;
-    Action                         action;
-    std::function<void (any& dt)>  enter;
-    std::function<void (any& dt)>  leave;
-    std::function<std::string ()>  error_message;
-    bool                           ignoreSemanticValue;
-    std::shared_ptr<Ope>           whitespaceOpe;
-    std::shared_ptr<Ope>           wordOpe;
-    bool                           enablePackratParsing;
-    bool                           is_token;
-    bool                           has_token_boundary;
-    Tracer                         tracer;
+    bool is_token() const {
+        std::call_once(is_token_init_, [this]() {
+            TokenChecker vis;
+            get_core_operator()->accept(vis);
+            is_token_ = vis.is_token();
+        });
+        return is_token_;
+    }
+
+    std::string                                                                          name;
+    size_t                                                                               id;
+    Action                                                                               action;
+    std::function<void (const char* s, size_t n, any& dt)>                               enter;
+    std::function<void (const char* s, size_t n, size_t matchlen, any& value, any& dt)>  leave;
+    std::function<std::string ()>                                                        error_message;
+    bool                                                                                 ignoreSemanticValue;
+    std::shared_ptr<Ope>                                                                 whitespaceOpe;
+    std::shared_ptr<Ope>                                                                 wordOpe;
+    bool                                                                                 enablePackratParsing;
+    bool                                                                                 is_macro;
+    std::vector<std::string>                                                             params;
+    Tracer                                                                               tracer;
 
 private:
-    friend class DefinitionReference;
+    friend class Reference;
 
     Definition& operator=(const Definition& rhs);
     Definition& operator=(Definition&& rhs);
 
     Result parse_core(const char* s, size_t n, SemanticValues& sv, any& dt, const char* path) const {
-        AssignIDToDefinition assignId;
-        holder_->accept(assignId);
-
         std::shared_ptr<Ope> ope = holder_;
+
+        AssignIDToDefinition vis;
+        holder_->accept(vis);
+
         if (whitespaceOpe) {
             ope = std::make_shared<Sequence>(whitespaceOpe, ope);
+            whitespaceOpe->accept(vis);
         }
 
-        Context cxt(path, s, n, assignId.ids.size(), whitespaceOpe, wordOpe, enablePackratParsing, tracer);
+        if (wordOpe) {
+            wordOpe->accept(vis);
+        }
+
+        Context cxt(path, s, n, vis.ids.size(), whitespaceOpe, wordOpe, enablePackratParsing, tracer);
         auto len = ope->parse(s, n, sv, cxt, dt);
         return Result{ success(len), len, cxt.error_pos, cxt.message_pos, cxt.message };
     }
 
     std::shared_ptr<Holder> holder_;
+    mutable std::once_flag  is_token_init_;
+    mutable bool            is_token_;
 };
 
 /*
@@ -1956,25 +2575,34 @@ inline size_t Holder::parse(const char* s, size_t n, SemanticValues& sv, Context
 
     c.trace(outer_->name.c_str(), s, n, sv, dt);
     c.nest_level++;
-    auto se = make_scope_exit([&]() { c.nest_level--; });
+    auto se = make_scope_exit([&]() {
+        c.nest_level--;
+    });
 
-    size_t      len;
-    any         val;
+    // Macro reference
+    // TODO: need packrat support
+    if (outer_->is_macro) {
+        const auto& rule = *ope_;
+        return rule.parse(s, n, sv, c, dt);
+    }
+
+    size_t len;
+    any    val;
 
     c.packrat(s, outer_->id, len, val, [&](any& a_val) {
-        auto& chldsv = c.push();
-
         if (outer_->enter) {
-            outer_->enter(dt);
+            outer_->enter(s, n, dt);
         }
 
         auto se2 = make_scope_exit([&]() {
             c.pop();
 
             if (outer_->leave) {
-                outer_->leave(dt);
+                outer_->leave(s, n, len, a_val, dt);
             }
         });
+
+        auto& chldsv = c.push();
 
         const auto& rule = *ope_;
         len = rule.parse(s, n, chldsv, c, dt);
@@ -2024,31 +2652,55 @@ inline any Holder::reduce(const SemanticValues& sv, any& dt) const {
     }
 }
 
-inline size_t DefinitionReference::parse(
+inline size_t Reference::parse(
     const char* s, size_t n, SemanticValues& sv, Context& c, any& dt) const {
-    const auto& rule = *get_rule();
-    return rule.parse(s, n, sv, c, dt);
+	if (rule_) {
+		// Reference rule
+		if (rule_->is_macro) {
+            // Macro
+            FindReference vis(c.top_args(), rule_->params);
+
+			// Collect arguments
+            std::vector<std::shared_ptr<Ope>> args;
+            for (auto arg: args_) {
+				arg->accept(vis);
+				args.push_back(vis.found_ope);
+			}
+
+			c.push_args(args);
+            auto se = make_scope_exit([&]() { c.pop_args(); });
+            auto ope = get_core_operator();
+			return ope->parse(s, n, sv, c, dt);
+		} else {
+			// Definition
+            auto ope = get_core_operator();
+            return ope->parse(s, n, sv, c, dt);
+		}
+	} else {
+		// Reference parameter in macro
+		const auto& args = c.top_args();
+		return args[iarg_]->parse(s, n, sv, c, dt);
+	}
 }
 
-inline std::shared_ptr<Ope> DefinitionReference::get_rule() const {
-    if (!rule_) {
-        std::call_once(init_, [this]() {
-            rule_ = grammar_.at(name_).holder_;
-        });
-    }
-    assert(rule_);
-    return rule_;
+inline std::shared_ptr<Ope> Reference::get_core_operator() const {
+    return rule_->holder_;
 }
 
 inline size_t BackReference::parse(const char* s, size_t n, SemanticValues& sv, Context& c, any& dt) const {
     c.trace("BackReference", s, n, sv, dt);
-    if (c.captures.find(name_) == c.captures.end()) {
-        throw std::runtime_error("Invalid back reference...");
+    auto it = c.capture_scope_stack.rbegin();
+    while (it != c.capture_scope_stack.rend()) {
+        const auto& captures = *it;
+        if (captures.find(name_) != captures.end()) {
+            const auto& lit = captures.at(name_);
+            auto init_is_word = false;
+            auto is_word = false;
+            return parse_literal(s, n, sv, c, dt, lit, init_is_word, is_word);
+        }
+        ++it;
     }
-    const auto& lit = c.captures[name_];
-    bool init_is_word = false;
-    bool is_word = false;
-    return parse_literal(s, n, sv, c, dt, lit, init_is_word, is_word);
+    throw std::runtime_error("Invalid back reference...");
 }
 
 inline void Sequence::accept(Visitor& v) { v.visit(*this); }
@@ -2062,12 +2714,14 @@ inline void LiteralString::accept(Visitor& v) { v.visit(*this); }
 inline void CharacterClass::accept(Visitor& v) { v.visit(*this); }
 inline void Character::accept(Visitor& v) { v.visit(*this); }
 inline void AnyCharacter::accept(Visitor& v) { v.visit(*this); }
+inline void CaptureScope::accept(Visitor& v) { v.visit(*this); }
 inline void Capture::accept(Visitor& v) { v.visit(*this); }
 inline void TokenBoundary::accept(Visitor& v) { v.visit(*this); }
 inline void Ignore::accept(Visitor& v) { v.visit(*this); }
+inline void User::accept(Visitor& v) { v.visit(*this); }
 inline void WeakHolder::accept(Visitor& v) { v.visit(*this); }
 inline void Holder::accept(Visitor& v) { v.visit(*this); }
-inline void DefinitionReference::accept(Visitor& v) { v.visit(*this); }
+inline void Reference::accept(Visitor& v) { v.visit(*this); }
 inline void Whitespace::accept(Visitor& v) { v.visit(*this); }
 inline void BackReference::accept(Visitor& v) { v.visit(*this); }
 
@@ -2082,84 +2736,95 @@ inline void AssignIDToDefinition::visit(Holder& ope) {
     ope.ope_->accept(*this);
 }
 
-/*
- * Factories
- */
-template <typename... Args>
-std::shared_ptr<Ope> seq(Args&& ...args) {
-    return std::make_shared<Sequence>(static_cast<std::shared_ptr<Ope>>(args)...);
+inline void AssignIDToDefinition::visit(Reference& ope) {
+    if (ope.rule_) {
+        for (auto arg: ope.args_) {
+            arg->accept(*this);
+        }
+        ope.rule_->accept(*this);
+    }
 }
 
-template <typename... Args>
-std::shared_ptr<Ope> cho(Args&& ...args) {
-    return std::make_shared<PrioritizedChoice>(static_cast<std::shared_ptr<Ope>>(args)...);
+inline void TokenChecker::visit(Reference& ope) {
+    if (ope.is_macro_) {
+        ope.rule_->accept(*this);
+        for (auto arg: ope.args_) {
+            arg->accept(*this);
+        }
+    } else {
+        has_rule_ = true;
+    }
 }
 
-inline std::shared_ptr<Ope> zom(const std::shared_ptr<Ope>& ope) {
-    return std::make_shared<ZeroOrMore>(ope);
+inline void DetectLeftRecursion::visit(Reference& ope) {
+    if (ope.name_ == name_) {
+        error_s = ope.s_;
+    } else if (!refs_.count(ope.name_)) {
+        refs_.insert(ope.name_);
+        if (ope.rule_) {
+            ope.rule_->accept(*this);
+        }
+    }
+    done_ = true;
 }
 
-inline std::shared_ptr<Ope> oom(const std::shared_ptr<Ope>& ope) {
-    return std::make_shared<OneOrMore>(ope);
+inline void ReferenceChecker::visit(Reference& ope) {
+    auto it = std::find(params_.begin(), params_.end(), ope.name_);
+    if (it != params_.end()) {
+        return;
+    }
+
+    if (!grammar_.count(ope.name_)) {
+        error_s[ope.name_] = ope.s_;
+        error_message[ope.name_] = "'" + ope.name_ + "' is not defined.";
+    } else {
+        const auto& rule = grammar_.at(ope.name_);
+        if (rule.is_macro) {
+            if (!ope.is_macro_ || ope.args_.size() != rule.params.size()) {
+                error_s[ope.name_] = ope.s_;
+                error_message[ope.name_] = "incorrect number of arguments.";
+            }
+        } else if (ope.is_macro_) {
+            error_s[ope.name_] = ope.s_;
+            error_message[ope.name_] = "'" + ope.name_ + "' is not macro.";
+        }
+    }
 }
 
-inline std::shared_ptr<Ope> opt(const std::shared_ptr<Ope>& ope) {
-    return std::make_shared<Option>(ope);
+inline void LinkReferences::visit(Reference& ope) {
+    if (grammar_.count(ope.name_)) {
+        auto& rule = grammar_.at(ope.name_);
+        ope.rule_ = &rule;
+    } else {
+        for (size_t i = 0; i < params_.size(); i++) {
+            const auto& param = params_[i];
+            if (param == ope.name_) {
+                ope.iarg_ = i;
+                break;
+            }
+        }
+    }
+    for (auto arg: ope.args_) {
+        arg->accept(*this);
+    }
 }
 
-inline std::shared_ptr<Ope> apd(const std::shared_ptr<Ope>& ope) {
-    return std::make_shared<AndPredicate>(ope);
-}
-
-inline std::shared_ptr<Ope> npd(const std::shared_ptr<Ope>& ope) {
-    return std::make_shared<NotPredicate>(ope);
-}
-
-inline std::shared_ptr<Ope> lit(const std::string& lit) {
-    return std::make_shared<LiteralString>(lit);
-}
-
-inline std::shared_ptr<Ope> cls(const std::string& chars) {
-    return std::make_shared<CharacterClass>(chars);
-}
-
-inline std::shared_ptr<Ope> chr(char dt) {
-    return std::make_shared<Character>(dt);
-}
-
-inline std::shared_ptr<Ope> dot() {
-    return std::make_shared<AnyCharacter>();
-}
-
-inline std::shared_ptr<Ope> cap(const std::shared_ptr<Ope>& ope, Capture::MatchAction ma) {
-    return std::make_shared<Capture>(ope, ma);
-}
-
-inline std::shared_ptr<Ope> tok(const std::shared_ptr<Ope>& ope) {
-    return std::make_shared<TokenBoundary>(ope);
-}
-
-inline std::shared_ptr<Ope> ign(const std::shared_ptr<Ope>& ope) {
-    return std::make_shared<Ignore>(ope);
-}
-
-inline std::shared_ptr<Ope> ref(const std::unordered_map<std::string, Definition>& grammar, const std::string& name, const char* s) {
-    return std::make_shared<DefinitionReference>(grammar, name, s);
-}
-
-inline std::shared_ptr<Ope> wsp(const std::shared_ptr<Ope>& ope) {
-    return std::make_shared<Whitespace>(std::make_shared<Ignore>(ope));
-}
-
-inline std::shared_ptr<Ope> bkr(const std::string& name) {
-    return std::make_shared<BackReference>(name);
+inline void FindReference::visit(Reference& ope) {
+    for (size_t i = 0; i < args_.size(); i++) {
+        const auto& name = params_[i];
+        if (name == ope.name_) {
+            found_ope = args_[i];
+            return;
+        }
+    }
+    found_ope = ope.shared_from_this();
 }
 
 /*-----------------------------------------------------------------------------
  *  PEG parser generator
  *---------------------------------------------------------------------------*/
 
-typedef std::unordered_map<std::string, Definition> Grammar;
+typedef std::unordered_map<std::string, std::shared_ptr<Ope>> Rules;
 typedef std::function<void (size_t, size_t, const std::string&)> Log;
 
 class ParserGenerator
@@ -2168,10 +2833,21 @@ public:
     static std::shared_ptr<Grammar> parse(
         const char*  s,
         size_t       n,
+        const Rules& rules,
         std::string& start,
         Log          log)
     {
-        return get_instance().perform_core(s, n, start, log);
+        return get_instance().perform_core(s, n, rules, start, log);
+    }
+
+     static std::shared_ptr<Grammar> parse(
+        const char*  s,
+        size_t       n,
+        std::string& start,
+        Log          log)
+    {
+        Rules dummy;
+        return parse(s, n, dummy, start, log);
     }
 
     // For debuging purpose
@@ -2194,125 +2870,34 @@ private:
         std::shared_ptr<Grammar>                         grammar;
         std::string                                      start;
         std::vector<std::pair<std::string, const char*>> duplicates;
-        std::unordered_map<std::string, const char*>     references;
 
         Data(): grammar(std::make_shared<Grammar>()) {}
-    };
-
-    struct DetectLeftRecursion : public Ope::Visitor {
-        DetectLeftRecursion(const std::string& name)
-            : s_(nullptr), name_(name), done_(false) {}
-
-        using Ope::Visitor::visit;
-
-        void visit(Sequence& ope) override {
-            for (auto op: ope.opes_) {
-                op->accept(*this);
-                if (done_) {
-                    break;
-                } else if (s_) {
-                    done_ = true;
-                    break;
-                }
-            }
-        }
-        void visit(PrioritizedChoice& ope) override {
-            for (auto op: ope.opes_) {
-                op->accept(*this);
-                if (s_) {
-                    done_ = true;
-                    break;
-                }
-            }
-        }
-        void visit(ZeroOrMore& ope) override {
-            ope.ope_->accept(*this);
-            done_ = false;
-        }
-        void visit(OneOrMore& ope) override {
-            ope.ope_->accept(*this);
-            done_ = true;
-        }
-        void visit(Option& ope) override {
-            ope.ope_->accept(*this);
-            done_ = false;
-        }
-        void visit(AndPredicate& ope) override {
-            ope.ope_->accept(*this);
-            done_ = false;
-        }
-        void visit(NotPredicate& ope) override {
-            ope.ope_->accept(*this);
-            done_ = false;
-        }
-        void visit(LiteralString& ope) override {
-            done_ = !ope.lit_.empty();
-        }
-        void visit(CharacterClass& /*ope*/) override {
-            done_ = true;
-        }
-        void visit(Character& /*ope*/) override {
-            done_ = true;
-        }
-        void visit(AnyCharacter& /*ope*/) override {
-            done_ = true;
-        }
-        void visit(Capture& ope) override {
-            ope.ope_->accept(*this);
-        }
-        void visit(TokenBoundary& ope) override {
-            ope.ope_->accept(*this);
-        }
-        void visit(Ignore& ope) override {
-            ope.ope_->accept(*this);
-        }
-        void visit(WeakHolder& ope) override {
-            ope.weak_.lock()->accept(*this);
-        }
-        void visit(Holder& ope) override {
-            ope.ope_->accept(*this);
-        }
-        void visit(DefinitionReference& ope) override {
-            if (ope.name_ == name_) {
-                s_ = ope.s_;
-            } else if (refs_.count(ope.name_)) {
-                ;
-            } else {
-                refs_.insert(ope.name_);
-                ope.get_rule()->accept(*this);
-            }
-            done_ = true;
-        }
-        void visit(BackReference& /*ope*/) override {
-            done_ = true;
-        }
-
-        const char* s_;
-
-    private:
-        std::string           name_;
-        std::set<std::string> refs_;
-        bool                  done_;
     };
 
     void make_grammar() {
         // Setup PEG syntax parser
         g["Grammar"]    <= seq(g["Spacing"], oom(g["Definition"]), g["EndOfFile"]);
-        g["Definition"] <= seq(opt(g["IGNORE"]), g["Identifier"], g["LEFTARROW"], g["Expression"]);
+        g["Definition"] <= cho(seq(g["Ignore"], g["IdentCont"], g["Parameters"], g["LEFTARROW"], g["Expression"]),
+                               seq(g["Ignore"], g["Identifier"], g["LEFTARROW"], g["Expression"]));
 
         g["Expression"] <= seq(g["Sequence"], zom(seq(g["SLASH"], g["Sequence"])));
         g["Sequence"]   <= zom(g["Prefix"]);
         g["Prefix"]     <= seq(opt(cho(g["AND"], g["NOT"])), g["Suffix"]);
         g["Suffix"]     <= seq(g["Primary"], opt(cho(g["QUESTION"], g["STAR"], g["PLUS"])));
-        g["Primary"]    <= cho(seq(opt(g["IGNORE"]), g["Identifier"], npd(g["LEFTARROW"])),
+        g["Primary"]    <= cho(seq(g["Ignore"], g["IdentCont"], g["Arguments"], npd(g["LEFTARROW"])),
+                               seq(g["Ignore"], g["Identifier"], npd(seq(opt(g["Parameters"]), g["LEFTARROW"]))),
                                seq(g["OPEN"], g["Expression"], g["CLOSE"]),
                                seq(g["BeginTok"], g["Expression"], g["EndTok"]),
+                               seq(g["BeginCapScope"], g["Expression"], g["EndCapScope"]),
                                seq(g["BeginCap"], g["Expression"], g["EndCap"]),
                                g["BackRef"], g["Literal"], g["Class"], g["DOT"]);
 
         g["Identifier"] <= seq(g["IdentCont"], g["Spacing"]);
         g["IdentCont"]  <= seq(g["IdentStart"], zom(g["IdentRest"]));
-        g["IdentStart"] <= cls("a-zA-Z_\x80-\xff%");
+
+        const static std::vector<std::pair<char32_t, char32_t>> range = {{ 0x0080, 0xFFFF }};
+        g["IdentStart"] <= cho(cls("a-zA-Z_%"), cls(range));
+
         g["IdentRest"]  <= cho(g["IdentStart"], cls("0-9"));
 
         g["Literal"]    <= cho(seq(cls("'"), tok(zom(seq(npd(cls("'")), g["Char"]))), cls("'"), g["Spacing"]),
@@ -2325,12 +2910,13 @@ private:
                                seq(chr('\\'), cls("0-3"), cls("0-7"), cls("0-7")),
                                seq(chr('\\'), cls("0-7"), opt(cls("0-7"))),
                                seq(lit("\\x"), cls("0-9a-fA-F"), opt(cls("0-9a-fA-F"))),
+                               seq(lit("\\u"), cls("0-9a-fA-F"), cls("0-9a-fA-F"), cls("0-9a-fA-F"), cls("0-9a-fA-F")),
                                seq(npd(chr('\\')), dot()));
 
-#if !defined(PEGLIB_NO_UNICODE_CHARS)
-        g["LEFTARROW"]  <= seq(cho(lit("<-"), lit(u8"←")), g["Spacing"]);
-#else
+#if defined(PEGLIB_NO_UNICODE_CHARS)
         g["LEFTARROW"]  <= seq(lit("<-"), g["Spacing"]);
+#else
+        g["LEFTARROW"]  <= seq(cho(lit("<-"), lit(u8"←")), g["Spacing"]);
 #endif
         ~g["SLASH"]     <= seq(chr('/'), g["Spacing"]);
         g["AND"]        <= seq(chr('&'), g["Spacing"]);
@@ -2338,25 +2924,34 @@ private:
         g["QUESTION"]   <= seq(chr('?'), g["Spacing"]);
         g["STAR"]       <= seq(chr('*'), g["Spacing"]);
         g["PLUS"]       <= seq(chr('+'), g["Spacing"]);
-        g["OPEN"]       <= seq(chr('('), g["Spacing"]);
-        g["CLOSE"]      <= seq(chr(')'), g["Spacing"]);
+        ~g["OPEN"]      <= seq(chr('('), g["Spacing"]);
+        ~g["CLOSE"]     <= seq(chr(')'), g["Spacing"]);
         g["DOT"]        <= seq(chr('.'), g["Spacing"]);
 
-        g["Spacing"]    <= zom(cho(g["Space"], g["Comment"]));
+        ~g["Spacing"]   <= zom(cho(g["Space"], g["Comment"]));
         g["Comment"]    <= seq(chr('#'), zom(seq(npd(g["EndOfLine"]), dot())), g["EndOfLine"]);
         g["Space"]      <= cho(chr(' '), chr('\t'), g["EndOfLine"]);
         g["EndOfLine"]  <= cho(lit("\r\n"), chr('\n'), chr('\r'));
         g["EndOfFile"]  <= npd(dot());
 
-        g["BeginTok"]   <= seq(chr('<'), g["Spacing"]);
-        g["EndTok"]     <= seq(chr('>'), g["Spacing"]);
+        ~g["BeginTok"]  <= seq(chr('<'), g["Spacing"]);
+        ~g["EndTok"]    <= seq(chr('>'), g["Spacing"]);
+
+        ~g["BeginCapScope"] <= seq(chr('$'), chr('('), g["Spacing"]);
+        ~g["EndCapScope"]   <= seq(chr(')'), g["Spacing"]);
 
         g["BeginCap"]   <= seq(chr('$'), tok(g["IdentCont"]), chr('<'), g["Spacing"]);
-        g["EndCap"]     <= seq(chr('>'), g["Spacing"]);
+        ~g["EndCap"]    <= seq(chr('>'), g["Spacing"]);
 
         g["BackRef"]    <= seq(chr('$'), tok(g["IdentCont"]), g["Spacing"]);
 
         g["IGNORE"]     <= chr('~');
+
+        g["Ignore"]     <= opt(g["IGNORE"]);
+        g["Parameters"] <= seq(g["OPEN"], g["Identifier"], zom(seq(g["COMMA"], g["Identifier"])), g["CLOSE"]);
+        g["Arguments"]  <= seq(g["OPEN"], g["Expression"], zom(seq(g["COMMA"], g["Expression"])), g["CLOSE"]);
+        ~g["COMMA"]     <= seq(chr(','), g["Spacing"]);
+
 
         // Set definition names
         for (auto& x: g) {
@@ -2366,13 +2961,20 @@ private:
 
     void setup_actions() {
         g["Definition"] = [&](const SemanticValues& sv, any& dt) {
+            auto is_macro = sv.choice() == 0;
+            auto ignore = sv[0].get<bool>();
+            auto name = sv[1].get<std::string>();
+
+            std::vector<std::string> params;
+            std::shared_ptr<Ope> ope;
+            if (is_macro) {
+                params = sv[2].get<std::vector<std::string>>();
+                ope = sv[4].get<std::shared_ptr<Ope>>();
+            } else {
+                ope = sv[3].get<std::shared_ptr<Ope>>();
+            }
+
             Data& data = *dt.get<Data*>();
-
-            auto ignore = (sv.size() == 4);
-            auto baseId = ignore ? 1u : 0u;
-
-            const auto& name = sv[baseId].get<std::string>();
-            auto ope = sv[baseId + 2].get<std::shared_ptr<Ope>>();
 
             auto& grammar = *data.grammar;
             if (!grammar.count(name)) {
@@ -2380,6 +2982,8 @@ private:
                 rule <= ope;
                 rule.name = name;
                 rule.ignoreSemanticValue = ignore;
+                rule.is_macro = is_macro;
+                rule.params = params;
 
                 if (data.start.empty()) {
                     data.start = name;
@@ -2449,37 +3053,41 @@ private:
             }
         };
 
-        g["Primary"] = [&](const SemanticValues& sv, any& dt) {
+        g["Primary"] = [&](const SemanticValues& sv, any& dt) -> std::shared_ptr<Ope> {
             Data& data = *dt.get<Data*>();
 
             switch (sv.choice()) {
-                case 0: { // Reference
-                    auto ignore = (sv.size() == 2);
-                    auto baseId = ignore ? 1u : 0u;
+                case 0:   // Macro Reference
+                case 1: { // Reference
+                    auto is_macro = sv.choice() == 0;
+                    auto ignore = sv[0].get<bool>();
+                    const auto& ident = sv[1].get<std::string>();
 
-                    const auto& ident = sv[baseId].get<std::string>();
-
-                    if (!data.references.count(ident)) {
-                        data.references[ident] = sv.c_str(); // for error handling
+                    std::vector<std::shared_ptr<Ope>> args;
+                    if (is_macro) {
+                        args = sv[2].get<std::vector<std::shared_ptr<Ope>>>();
                     }
 
                     if (ignore) {
-                        return ign(ref(*data.grammar, ident, sv.c_str()));
+                        return ign(ref(*data.grammar, ident, sv.c_str(), is_macro, args));
                     } else {
-                        return ref(*data.grammar, ident, sv.c_str());
+                        return ref(*data.grammar, ident, sv.c_str(), is_macro, args);
                     }
                 }
-                case 1: { // (Expression)
-                    return sv[1].get<std::shared_ptr<Ope>>();
+                case 2: { // (Expression)
+                    return sv[0].get<std::shared_ptr<Ope>>();
                 }
-                case 2: { // TokenBoundary
-                    return tok(sv[1].get<std::shared_ptr<Ope>>());
+                case 3: { // TokenBoundary
+                    return tok(sv[0].get<std::shared_ptr<Ope>>());
                 }
-                case 3: { // Capture
+                case 4: { // CaptureScope
+                    return csc(sv[0].get<std::shared_ptr<Ope>>());
+                }
+                case 5: { // Capture
                     const auto& name = sv[0].get<std::string>();
                     auto ope = sv[1].get<std::shared_ptr<Ope>>();
                     return cap(ope, [name](const char* a_s, size_t a_n, Context& c) {
-                        c.captures[name] = std::string(a_s, a_n);
+                        c.capture_scope_stack.back()[name] = std::string(a_s, a_n);
                     });
                 }
                 default: {
@@ -2492,13 +3100,41 @@ private:
             return std::string(sv.c_str(), sv.length());
         };
 
-        g["Literal"] = [this](const SemanticValues& sv) {
+        g["IdentStart"] = [](const SemanticValues& /*sv*/) {
+            return std::string();
+        };
+
+        g["IdentRest"] = [](const SemanticValues& /*sv*/) {
+            return std::string();
+        };
+
+        g["Literal"] = [](const SemanticValues& sv) {
             const auto& tok = sv.tokens.front();
             return lit(resolve_escape_sequence(tok.first, tok.second));
         };
-        g["Class"] = [this](const SemanticValues& sv) {
-            const auto& tok = sv.tokens.front();
-            return cls(resolve_escape_sequence(tok.first, tok.second));
+        g["Class"] = [](const SemanticValues& sv) {
+            auto ranges = sv.transform<std::pair<char32_t, char32_t>>();
+            return cls(ranges);
+        };
+        g["Range"] = [](const SemanticValues& sv) {
+            switch (sv.choice()) {
+                case 0: {
+                    auto s1 = sv[0].get<std::string>();
+                    auto s2 = sv[1].get<std::string>();
+                    auto cp1 = decode_codepoint(s1.c_str(), s1.length());
+                    auto cp2 = decode_codepoint(s2.c_str(), s2.length());
+                    return std::make_pair(cp1, cp2);
+                }
+                case 1: {
+                    auto s = sv[0].get<std::string>();
+                    auto cp = decode_codepoint(s.c_str(), s.length());
+                    return std::make_pair(cp, cp);
+                }
+            }
+            return std::make_pair<char32_t, char32_t>(0, 0);
+        };
+        g["Char"] = [](const SemanticValues& sv) {
+            return resolve_escape_sequence(sv.c_str(), sv.length());
         };
 
         g["AND"]      = [](const SemanticValues& sv) { return *sv.c_str(); };
@@ -2514,11 +3150,22 @@ private:
         g["BackRef"] = [&](const SemanticValues& sv) {
             return bkr(sv.token());
         };
+
+        g["Ignore"] = [](const SemanticValues& sv) { return sv.size() > 0; };
+
+        g["Parameters"] = [](const SemanticValues& sv) {
+            return sv.transform<std::string>();
+        };
+
+        g["Arguments"] = [](const SemanticValues& sv) {
+            return sv.transform<std::shared_ptr<Ope>>();
+        };
     }
 
     std::shared_ptr<Grammar> perform_core(
         const char*  s,
         size_t       n,
+        const Rules& rules,
         std::string& start,
         Log          log)
     {
@@ -2541,6 +3188,22 @@ private:
 
         auto& grammar = *data.grammar;
 
+        // User provided rules
+        for (const auto& x: rules) {
+            auto name = x.first;
+            bool ignore = false;
+            if (!name.empty() && name[0] == '~') {
+                ignore = true;
+                name.erase(0, 1);
+            }
+            if (!name.empty()) {
+                auto& rule = grammar[name];
+                rule <= x.second;
+                rule.name = name;
+                rule.ignoreSemanticValue = ignore;
+            }
+        }
+
         // Check duplicated definitions
         bool ret = data.duplicates.empty();
 
@@ -2554,13 +3217,17 @@ private:
         }
 
         // Check missing definitions
-        for (const auto& x : data.references) {
-            const auto& name = x.first;
-            auto ptr = x.second;
-            if (!grammar.count(name)) {
+        for (auto& x: grammar) {
+            auto& rule = x.second;
+
+            ReferenceChecker vis(*data.grammar, rule.params);
+            rule.accept(vis);
+            for (const auto& y: vis.error_s) {
+                const auto& name = y.first;
+                const auto ptr = y.second;
                 if (log) {
                     auto line = line_info(s, ptr);
-                    log(line.first, line.second, "'" + name + "' is not defined.");
+                    log(line.first, line.second, vis.error_message[name]);
                 }
                 ret = false;
             }
@@ -2570,6 +3237,13 @@ private:
             return nullptr;
         }
 
+        // Link references
+        for (auto& x: grammar) {
+            auto& rule = x.second;
+            LinkReferences vis(*data.grammar, rule.params);
+            rule.accept(vis);
+        }
+
         // Check left recursion
         ret = true;
 
@@ -2577,11 +3251,11 @@ private:
             const auto& name = x.first;
             auto& rule = x.second;
 
-            DetectLeftRecursion lr(name);
-            rule.accept(lr);
-            if (lr.s_) {
+            DetectLeftRecursion vis(name);
+            rule.accept(vis);
+            if (vis.error_s) {
                 if (log) {
-                    auto line = line_info(s, lr.s_);
+                    auto line = line_info(s, vis.error_s);
                     log(line.first, line.second, "'" + name + "' is left recursive.");
                 }
                 ret = false;;
@@ -2608,85 +3282,6 @@ private:
         }
 
         return data.grammar;
-    }
-
-    bool is_hex(char c, int& v) {
-        if ('0' <= c && c <= '9') {
-            v = c - '0';
-            return true;
-        } else if ('a' <= c && c <= 'f') {
-            v = c - 'a' + 10;
-            return true;
-        } else if ('A' <= c && c <= 'F') {
-            v = c - 'A' + 10;
-            return true;
-        }
-        return false;
-    }
-
-    bool is_digit(char c, int& v) {
-        if ('0' <= c && c <= '9') {
-            v = c - '0';
-            return true;
-        }
-        return false;
-    }
-
-    std::pair<char, size_t> parse_hex_number(const char* s, size_t n, size_t i) {
-        char ret = 0;
-        int val;
-        while (i < n && is_hex(s[i], val)) {
-            ret = static_cast<char>(ret * 16 + val);
-            i++;
-        }
-        return std::make_pair(ret, i);
-    }
-
-    std::pair<char, size_t> parse_octal_number(const char* s, size_t n, size_t i) {
-        char ret = 0;
-        int val;
-        while (i < n && is_digit(s[i], val)) {
-            ret = static_cast<char>(ret * 8 + val);
-            i++;
-        }
-        return std::make_pair(ret, i);
-    }
-
-    std::string resolve_escape_sequence(const char* s, size_t n) {
-        std::string r;
-        r.reserve(n);
-
-        size_t i = 0;
-        while (i < n) {
-            auto ch = s[i];
-            if (ch == '\\') {
-                i++;
-                switch (s[i]) {
-                    case 'n':  r += '\n'; i++; break;
-                    case 'r':  r += '\r'; i++; break;
-                    case 't':  r += '\t'; i++; break;
-                    case '\'': r += '\''; i++; break;
-                    case '"':  r += '"';  i++; break;
-                    case '[':  r += '[';  i++; break;
-                    case ']':  r += ']';  i++; break;
-                    case '\\': r += '\\'; i++; break;
-                    case 'x': {
-                        std::tie(ch, i) = parse_hex_number(s, n, i + 1);
-                        r += ch;
-                        break;
-                    }
-                    default: {
-                        std::tie(ch, i) = parse_octal_number(s, n, i);
-                        r += ch;
-                        break;
-                    }
-                }
-            } else {
-                r += ch;
-                i++;
-            }
-        }
-        return r;
     }
 
     Grammar g;
@@ -2859,20 +3454,35 @@ class parser
 public:
     parser() = default;
 
-    parser(const char* s, size_t n) {
-        load_grammar(s, n);
+    parser(const char* s, size_t n, const Rules& rules) {
+        load_grammar(s, n, rules);
     }
 
+    parser(const char* s, const Rules& rules)
+        : parser(s, strlen(s), rules) {}
+
+    parser(const char* s, size_t n)
+        : parser(s, n, Rules()) {}
+
     parser(const char* s)
-        : parser(s, strlen(s)) {}
+        : parser(s, strlen(s), Rules()) {}
 
     operator bool() {
         return grammar_ != nullptr;
     }
 
-    bool load_grammar(const char* s, size_t n) {
-        grammar_ = ParserGenerator::parse(s, n, start_, log);
+    bool load_grammar(const char* s, size_t n, const Rules& rules) {
+        grammar_ = ParserGenerator::parse(s, n, rules, start_, log);
         return grammar_ != nullptr;
+    }
+
+    bool load_grammar(const char* s, size_t n) {
+        return load_grammar(s, n, Rules());
+    }
+
+    bool load_grammar(const char* s, const Rules& rules) {
+        auto n = strlen(s);
+        return load_grammar(s, n, rules);
     }
 
     bool load_grammar(const char* s) {
@@ -2973,6 +3583,15 @@ public:
         return (*grammar_)[s];
     }
 
+    std::vector<std::string> get_rule_names(){
+        std::vector<std::string> rules;
+        rules.reserve(grammar_->size());
+        for (auto const& r : *grammar_) {
+            rules.emplace_back(r.first);
+        }
+        return rules;
+    }
+
     void enable_packrat_parsing() {
         if (grammar_ != nullptr) {
             auto& rule = (*grammar_)[start_];
@@ -2987,11 +3606,10 @@ public:
             auto& rule = x.second;
 
             if (!rule.action) {
-                auto is_token = rule.is_token;
-                rule.action = [=](const SemanticValues& sv) {
+                rule.action = [&](const SemanticValues& sv) {
                     auto line = line_info(sv.ss, sv.c_str());
 
-                    if (is_token) {
+                    if (rule.is_token()) {
                         return std::make_shared<T>(sv.path, line.first, line.second, name.c_str(), sv.token());
                     }
 
@@ -3593,6 +4211,25 @@ class LIB_API TimeStamp {
 
     public:
         template<class Visitor>
+        inline void accept(uint32_t fieldId, Visitor &visitor) {
+            (void)fieldId;
+            (void)visitor;
+//            visitor.preVisit(ID(), ShortName(), LongName());
+            
+            if (1 == fieldId) {
+                doVisit(1, std::move("int32_t"s), std::move("seconds"s), m_seconds, visitor);
+                return;
+            }
+            
+            if (2 == fieldId) {
+                doVisit(2, std::move("int32_t"s), std::move("microseconds"s), m_microseconds, visitor);
+                return;
+            }
+            
+//            visitor.postVisit();
+        }
+
+        template<class Visitor>
         inline void accept(Visitor &visitor) {
             visitor.preVisit(ID(), ShortName(), LongName());
             
@@ -3813,6 +4450,45 @@ class LIB_API Envelope {
 
     public:
         template<class Visitor>
+        inline void accept(uint32_t fieldId, Visitor &visitor) {
+            (void)fieldId;
+            (void)visitor;
+//            visitor.preVisit(ID(), ShortName(), LongName());
+            
+            if (1 == fieldId) {
+                doVisit(1, std::move("int32_t"s), std::move("dataType"s), m_dataType, visitor);
+                return;
+            }
+            
+            if (2 == fieldId) {
+                doVisit(2, std::move("std::string"s), std::move("serializedData"s), m_serializedData, visitor);
+                return;
+            }
+            
+            if (3 == fieldId) {
+                doVisit(3, std::move("cluon::data::TimeStamp"s), std::move("sent"s), m_sent, visitor);
+                return;
+            }
+            
+            if (4 == fieldId) {
+                doVisit(4, std::move("cluon::data::TimeStamp"s), std::move("received"s), m_received, visitor);
+                return;
+            }
+            
+            if (5 == fieldId) {
+                doVisit(5, std::move("cluon::data::TimeStamp"s), std::move("sampleTimeStamp"s), m_sampleTimeStamp, visitor);
+                return;
+            }
+            
+            if (6 == fieldId) {
+                doVisit(6, std::move("uint32_t"s), std::move("senderStamp"s), m_senderStamp, visitor);
+                return;
+            }
+            
+//            visitor.postVisit();
+        }
+
+        template<class Visitor>
         inline void accept(Visitor &visitor) {
             visitor.preVisit(ID(), ShortName(), LongName());
             
@@ -4025,6 +4701,25 @@ class LIB_API PlayerCommand {
 
     public:
         template<class Visitor>
+        inline void accept(uint32_t fieldId, Visitor &visitor) {
+            (void)fieldId;
+            (void)visitor;
+//            visitor.preVisit(ID(), ShortName(), LongName());
+            
+            if (1 == fieldId) {
+                doVisit(1, std::move("uint8_t"s), std::move("command"s), m_command, visitor);
+                return;
+            }
+            
+            if (2 == fieldId) {
+                doVisit(2, std::move("float"s), std::move("seekTo"s), m_seekTo, visitor);
+                return;
+            }
+            
+//            visitor.postVisit();
+        }
+
+        template<class Visitor>
         inline void accept(Visitor &visitor) {
             visitor.preVisit(ID(), ShortName(), LongName());
             
@@ -4221,6 +4916,30 @@ class LIB_API PlayerStatus {
 
     public:
         template<class Visitor>
+        inline void accept(uint32_t fieldId, Visitor &visitor) {
+            (void)fieldId;
+            (void)visitor;
+//            visitor.preVisit(ID(), ShortName(), LongName());
+            
+            if (1 == fieldId) {
+                doVisit(1, std::move("uint8_t"s), std::move("state"s), m_state, visitor);
+                return;
+            }
+            
+            if (2 == fieldId) {
+                doVisit(2, std::move("uint32_t"s), std::move("numberOfEntries"s), m_numberOfEntries, visitor);
+                return;
+            }
+            
+            if (3 == fieldId) {
+                doVisit(3, std::move("uint32_t"s), std::move("currentEntryForPlayback"s), m_currentEntryForPlayback, visitor);
+                return;
+            }
+            
+//            visitor.postVisit();
+        }
+
+        template<class Visitor>
         inline void accept(Visitor &visitor) {
             visitor.preVisit(ID(), ShortName(), LongName());
             
@@ -4359,20 +5078,11 @@ inline std::vector<std::string> split(const std::string &str,
 
 #endif
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_TIME_HPP
@@ -4524,18 +5234,9 @@ inline cluon::data::TimeStamp now() noexcept {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_CLUON_HPP
@@ -4597,6 +5298,16 @@ inline cluon::data::TimeStamp now() noexcept {
 namespace cluon {
 
 /**
+This class can be used to define hash keys.
+*/
+class UseUInt32ValueAsHashKey {
+   public:
+    inline std::size_t operator()(const uint32_t v) const noexcept {
+        return static_cast<std::size_t>(v);
+    }
+};
+
+/**
  * @return Map for command line parameters passed as --key=value into key->values.
  */
 std::map<std::string, std::string> getCommandlineArguments(int32_t argc, char **argv) noexcept;
@@ -4607,18 +5318,9 @@ std::map<std::string, std::string> getCommandlineArguments(int32_t argc, char **
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_METAMESSAGE_HPP
@@ -4820,18 +5522,9 @@ class LIBCLUON_API MetaMessage {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_MESSAGEPARSER_HPP
@@ -4907,20 +5600,11 @@ class LIBCLUON_API MessageParser {
 
 #endif
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_TERMINATEHANDLER_HPP
@@ -4966,20 +5650,11 @@ class LIBCLUON_API TerminateHandler {
 
 #endif
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_NOTIFYINGPIPELINE_HPP
@@ -5095,18 +5770,9 @@ class LIBCLUON_API NotifyingPipeline {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_UDPPACKETSIZECONSTRAINTS_H
@@ -5127,18 +5793,9 @@ namespace cluon {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_UDPSENDER_HPP
@@ -5231,18 +5888,9 @@ class LIBCLUON_API UDPSender {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_UDPRECEIVER_HPP
@@ -5376,20 +6024,11 @@ class LIBCLUON_API UDPReceiver {
 
 #endif
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_TCPCONNECTION_HPP
@@ -5555,20 +6194,11 @@ class LIBCLUON_API TCPConnection {
 
 #endif
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_TCPSERVER_HPP
@@ -5643,18 +6273,9 @@ class LIBCLUON_API TCPServer {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_PROTOCONSTANTS_HPP
@@ -5676,18 +6297,9 @@ namespace cluon {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_TOPROTOVISITOR_HPP
@@ -5815,18 +6427,9 @@ class LIBCLUON_API ToProtoVisitor {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_FROMPROTOVISITOR_HPP
@@ -5834,11 +6437,14 @@ class LIBCLUON_API ToProtoVisitor {
 
 //#include "cluon/ProtoConstants.hpp"
 //#include "cluon/cluon.hpp"
+//#include "cluon/any/any.hpp"
 
 #include <cstdint>
-#include <map>
+#include <cstddef>
+#include <array>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace cluon {
@@ -5846,59 +6452,6 @@ namespace cluon {
 This class decodes a given message from Proto format.
 */
 class LIBCLUON_API FromProtoVisitor {
-    /**
-     * This class represents an entry in a Proto payload stream.
-     */
-    class ProtoKeyValue {
-       private:
-        ProtoKeyValue(ProtoKeyValue &&) = delete;
-        ProtoKeyValue &operator=(const ProtoKeyValue &) = delete;
-
-       public:
-        ProtoKeyValue() noexcept;
-        ProtoKeyValue(const ProtoKeyValue &) = default; // LCOV_EXCL_LINE
-        ProtoKeyValue &operator=(ProtoKeyValue &&) = default;
-        ~ProtoKeyValue()                           = default;
-
-        /**
-         * Constructor to pre-allocate the vector<char> for length-delimited types.
-         *
-         * @param key Proto key.
-         * @param type Proto type.
-         * @param length Length of the contained value.
-         */
-        ProtoKeyValue(uint32_t key, ProtoConstants type, uint64_t length) noexcept;
-
-        /**
-         * Constructor for cases when a VARINT value is encoded.
-         *
-         * @param key Proto key.
-         * @param value Actual VarInt value.
-         */
-        ProtoKeyValue(uint32_t key, uint64_t value) noexcept;
-
-        uint32_t key() const noexcept;
-        ProtoConstants type() const noexcept;
-        uint64_t length() const noexcept;
-
-        uint64_t valueAsVarInt() const noexcept;
-        float valueAsFloat() const noexcept;
-        double valueAsDouble() const noexcept;
-        std::string valueAsString() const noexcept;
-
-        /**
-         * @return Raw value as reference.
-         */
-        std::vector<char> &rawBuffer() noexcept;
-
-       private:
-        uint32_t m_key{0};
-        ProtoConstants m_type{ProtoConstants::VARINT};
-        uint64_t m_length{0};
-        std::vector<char> m_value{};
-        uint64_t m_varIntValue{0};
-    };
-
    private:
     FromProtoVisitor(const FromProtoVisitor &) = delete;
     FromProtoVisitor(FromProtoVisitor &&)      = delete;
@@ -5940,19 +6493,79 @@ class LIBCLUON_API FromProtoVisitor {
     void visit(uint32_t id, std::string &&typeName, std::string &&name, std::string &v) noexcept;
 
     template <typename T>
-    void visit(uint32_t &id, std::string &&typeName, std::string &&name, T &value) noexcept {
+    void visit(uint32_t &id, std::string &&typeName, std::string &&name, T &v) noexcept {
         (void)typeName;
         (void)name;
 
-        if (0 < m_mapOfKeyValues.count(id)) {
-            const std::string s{m_mapOfKeyValues[id].valueAsString()};
-
-            std::stringstream sstr{s};
+        if (m_callToDecodeFromWithDirectVisit) {
+            std::stringstream sstr{std::move(std::string(m_stringValue.data(), static_cast<std::size_t>(m_value)))};
             cluon::FromProtoVisitor nestedProtoDecoder;
-            nestedProtoDecoder.decodeFrom(sstr);
-
-            value.accept(nestedProtoDecoder);
+            nestedProtoDecoder.decodeFrom(sstr, v);
         }
+        else if (0 < m_mapOfKeyValues.count(id)) {
+            try {
+                std::stringstream sstr{linb::any_cast<std::string>(m_mapOfKeyValues[id])};
+                cluon::FromProtoVisitor nestedProtoDecoder;
+                nestedProtoDecoder.decodeFrom(sstr);
+                v.accept(nestedProtoDecoder);
+            } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+            }
+        }
+    }
+
+   public:
+    /**
+     * This method decodes a given istream into corresponding fields of v.
+     *
+     * @param in istream to decode.
+     * @param v Data structure to receive the decoded values.
+     */
+    template<typename T>
+    void decodeFrom(std::istream &in, T &v) noexcept {
+        m_callToDecodeFromWithDirectVisit = true;
+        while (in.good()) {
+            // First stage: Read keyFieldType (encoded as VarInt).
+            if (0 < fromVarInt(in, m_keyFieldType)) {
+                // Succeeded to read keyFieldType entry; extract information.
+                m_protoType = static_cast<ProtoConstants>(m_keyFieldType & 0x7);
+                m_fieldId = static_cast<uint32_t>(m_keyFieldType >> 3);
+                switch (m_protoType) {
+                    case ProtoConstants::VARINT:
+                    {
+                        // Directly decode VarInt value.
+                        fromVarInt(in, m_value);
+                        v.accept(m_fieldId, *this);
+                    }
+                    break;
+                    case ProtoConstants::EIGHT_BYTES:
+                    {
+                        readBytesFromStream(in, sizeof(double), m_doubleValue.buffer.data());
+                        m_doubleValue.uint64Value = le64toh(m_doubleValue.uint64Value);
+                        v.accept(m_fieldId, *this);
+                    }
+                    break;
+                    case ProtoConstants::FOUR_BYTES:
+                    {
+                        readBytesFromStream(in, sizeof(float), m_floatValue.buffer.data());
+                        m_floatValue.uint32Value = le32toh(m_floatValue.uint32Value);
+                        v.accept(m_fieldId, *this);
+                    }
+                    break;
+                    case ProtoConstants::LENGTH_DELIMITED:
+                    {
+                        fromVarInt(in, m_value);
+                        const std::size_t BYTES_TO_READ_FROM_STREAM{static_cast<std::size_t>(m_value)};
+                        if (m_stringValue.capacity() < BYTES_TO_READ_FROM_STREAM) {
+                            m_stringValue.reserve(BYTES_TO_READ_FROM_STREAM);
+                        }
+                        readBytesFromStream(in, BYTES_TO_READ_FROM_STREAM, m_stringValue.data());
+                        v.accept(m_fieldId, *this);
+                    }
+                    break;
+                }
+            }
+        }
+        m_callToDecodeFromWithDirectVisit = false;
     }
 
    private:
@@ -5963,11 +6576,38 @@ class LIBCLUON_API FromProtoVisitor {
 
     std::size_t fromVarInt(std::istream &in, uint64_t &value) noexcept;
 
-    void readBytesFromStream(std::istream &in, std::size_t bytesToReadFromStream, std::vector<char> &buffer) noexcept;
+    void readBytesFromStream(std::istream &in, std::size_t bytesToReadFromStream, char *buffer) noexcept;
 
    private:
-    std::stringstream m_buffer{""};
-    std::map<uint32_t, ProtoKeyValue> m_mapOfKeyValues{};
+    // This Boolean flag indicates whether we consecutively decode from istream
+    // and inject the decoded values directly into the receiving data structure.
+    bool m_callToDecodeFromWithDirectVisit{false};
+    std::unordered_map<uint32_t, linb::any, UseUInt32ValueAsHashKey> m_mapOfKeyValues{};
+
+   private:
+    // Fields necessary to decode from an istream.
+    uint64_t m_value{0};
+
+    // Union buffer for double values.
+    union DoubleValue {
+        std::array<char, sizeof(double)> buffer;
+        uint64_t uint64Value;
+        double doubleValue{0};
+    } m_doubleValue;
+
+    // Union buffer for float values.
+    union FloatValue {
+        std::array<char, sizeof(float)> buffer;
+        uint32_t uint32Value;
+        float floatValue{0};
+    } m_floatValue;
+
+    // Buffer for strings.
+    std::vector<char> m_stringValue;
+
+    uint64_t m_keyFieldType{0};
+    ProtoConstants m_protoType{ProtoConstants::VARINT};
+    uint32_t m_fieldId{0};
 };
 } // namespace cluon
 
@@ -5975,18 +6615,9 @@ class LIBCLUON_API FromProtoVisitor {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_FROMLCMVISITOR_HPP
@@ -6077,18 +6708,9 @@ class LIBCLUON_API FromLCMVisitor {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_MSGPACKCONSTANTS_HPP
@@ -6136,18 +6758,9 @@ namespace cluon {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_FROMMSGPACKVISITOR_HPP
@@ -6264,20 +6877,11 @@ class LIBCLUON_API FromMsgPackVisitor {
 
 #endif
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_JSONCONSTANTS_HPP
@@ -6300,20 +6904,11 @@ namespace cluon {
 
 #endif
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_FROMJSONVISITOR_HPP
@@ -6437,18 +7032,9 @@ class LIBCLUON_API FromJSONVisitor {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_TOJSONVISITOR_HPP
@@ -6553,18 +7139,9 @@ class LIBCLUON_API ToJSONVisitor {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_TOCSVVISITOR_HPP
@@ -6690,18 +7267,9 @@ class LIBCLUON_API ToCSVVisitor {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_TOLCMVISITOR_HPP
@@ -6791,18 +7359,9 @@ class LIBCLUON_API ToLCMVisitor {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_TOODVDVISITOR_HPP
@@ -6896,18 +7455,9 @@ class LIBCLUON_API ToODVDVisitor {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_TOMSGPACKVISITOR_HPP
@@ -6990,20 +7540,11 @@ class LIBCLUON_API ToMsgPackVisitor {
 
 #endif
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_ENVELOPE_HPP
@@ -7111,8 +7652,7 @@ inline std::pair<bool, cluon::data::Envelope> extractEnvelope(std::istream &in) 
                 if (retVal) {
                     std::stringstream sstr(std::string(buffer.begin(), buffer.begin() + static_cast<std::streamsize>(LENGTH)));
                     cluon::FromProtoVisitor protoDecoder;
-                    protoDecoder.decodeFrom(sstr);
-                    env.accept(protoDecoder);
+                    protoDecoder.decodeFrom(sstr, env);
                 }
             }
         }
@@ -7142,18 +7682,9 @@ inline T extractMessage(cluon::data::Envelope &&envelope) noexcept {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_ENVELOPECONVERTER_HPP
@@ -7235,7 +7766,9 @@ class LIBCLUON_API EnvelopeConverter {
     std::string getProtoEncodedEnvelopeFromJSON(const std::string &json, int32_t messageIdentifier, uint32_t senderStamp) noexcept;
 
    private:
+// clang-format off
     std::string getProtoEncodedEnvelopeFromJSON(const std::string &json, int32_t messageIdentifier, uint32_t senderStamp, cluon::data::TimeStamp sampleTimeStamp) noexcept;
+// clang-format on
 
    private:
     std::vector<cluon::MetaMessage> m_listOfMetaMessages{};
@@ -7246,18 +7779,9 @@ class LIBCLUON_API EnvelopeConverter {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_GENERICMESSAGE_HPP
@@ -7270,8 +7794,8 @@ class LIBCLUON_API EnvelopeConverter {
 //#include "cluon/cluonDataStructures.hpp"
 
 #include <cstdint>
-#include <map>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace cluon {
@@ -7474,11 +7998,11 @@ class LIBCLUON_API GenericMessage {
         /**
          * @return Intermediate data representation for this GenericMessage.
          */
-        std::map<uint32_t, linb::any> intermediateDataRepresentation() const noexcept;
+        std::unordered_map<uint32_t, linb::any, UseUInt32ValueAsHashKey> intermediateDataRepresentation() const noexcept;
 
        private:
         MetaMessage m_metaMessage{};
-        std::map<uint32_t, linb::any> m_intermediateDataRepresentation;
+        std::unordered_map<uint32_t, linb::any, UseUInt32ValueAsHashKey> m_intermediateDataRepresentation;
     };
 
    private:
@@ -7556,104 +8080,28 @@ class LIBCLUON_API GenericMessage {
    public:
     /**
      * This method allows other instances to visit this GenericMessage for
+     * post-processing the contained data on an individual field basis.
+     *
+     * @param fieldId Identifier for the field to visit.
+     * @param visitor Instance of the visitor visiting this GenericMessage.
+     */
+    template<class Visitor>
+    inline void accept(uint32_t fieldId, Visitor &visitor) {
+        const bool VISIT_ALL{false};
+        accept<Visitor>(fieldId, visitor, VISIT_ALL);
+    }
+
+    /**
+     * This method allows other instances to visit this GenericMessage for
      * post-processing the contained data.
      *
      * @param visitor Instance of the visitor visiting this GenericMessage.
      */
     template <class Visitor>
     void accept(Visitor &visitor) {
-        visitor.preVisit(m_metaMessage.messageIdentifier(), m_metaMessage.messageName(), m_longName);
-
-        for (const auto &f : m_metaMessage.listOfMetaFields()) {
-            if (f.fieldDataType() == MetaMessage::MetaField::BOOL_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
-                try {
-                    auto &v = linb::any_cast<bool &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
-                    doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
-                } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
-                }
-            } else if (f.fieldDataType() == MetaMessage::MetaField::CHAR_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
-                try {
-                    auto &v = linb::any_cast<char &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
-                    doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
-                } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
-                }
-            } else if (f.fieldDataType() == MetaMessage::MetaField::UINT8_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
-                try {
-                    auto &v = linb::any_cast<uint8_t &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
-                    doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
-                } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
-                }
-            } else if (f.fieldDataType() == MetaMessage::MetaField::INT8_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
-                try {
-                    auto &v = linb::any_cast<int8_t &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
-                    doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
-                } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
-                }
-            } else if (f.fieldDataType() == MetaMessage::MetaField::UINT16_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
-                try {
-                    auto &v = linb::any_cast<uint16_t &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
-                    doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
-                } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
-                }
-            } else if (f.fieldDataType() == MetaMessage::MetaField::INT16_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
-                try {
-                    auto &v = linb::any_cast<int16_t &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
-                    doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
-                } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
-                }
-            } else if (f.fieldDataType() == MetaMessage::MetaField::UINT32_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
-                try {
-                    auto &v = linb::any_cast<uint32_t &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
-                    doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
-                } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
-                }
-            } else if (f.fieldDataType() == MetaMessage::MetaField::INT32_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
-                try {
-                    auto &v = linb::any_cast<int32_t &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
-                    doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
-                } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
-                }
-            } else if (f.fieldDataType() == MetaMessage::MetaField::UINT64_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
-                try {
-                    auto &v = linb::any_cast<uint64_t &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
-                    doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
-                } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
-                }
-            } else if (f.fieldDataType() == MetaMessage::MetaField::INT64_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
-                try {
-                    auto &v = linb::any_cast<int64_t &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
-                    doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
-                } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
-                }
-            } else if (f.fieldDataType() == MetaMessage::MetaField::FLOAT_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
-                try {
-                    auto &v = linb::any_cast<float &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
-                    doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
-                } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
-                }
-            } else if (f.fieldDataType() == MetaMessage::MetaField::DOUBLE_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
-                try {
-                    auto &v = linb::any_cast<double &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
-                    doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
-                } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
-                }
-            } else if (((f.fieldDataType() == MetaMessage::MetaField::STRING_T) || (f.fieldDataType() == MetaMessage::MetaField::BYTES_T))
-                       && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
-                try {
-                    auto &v = linb::any_cast<std::string &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
-                    doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
-                } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
-                }
-            } else if (f.fieldDataType() == MetaMessage::MetaField::MESSAGE_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
-                try {
-                    auto &v = linb::any_cast<cluon::GenericMessage &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
-                    doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
-                } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
-                }
-            }
-        }
-
-        visitor.postVisit();
+        const uint32_t FIELD_ID{0};
+        const bool VISIT_ALL{true};
+        accept<Visitor>(FIELD_ID, visitor, VISIT_ALL);
     }
 
     /**
@@ -7761,11 +8209,114 @@ class LIBCLUON_API GenericMessage {
     }
 
    private:
+    template<class Visitor>
+    inline void accept(uint32_t fieldId, Visitor &visitor, bool visitAll) {
+        visitor.preVisit(ID(), ShortName(), LongName());
+
+        for (const auto &f : m_metaMessage.listOfMetaFields()) {
+            if (visitAll || (fieldId == f.fieldIdentifier())) {
+                if (f.fieldDataType() == MetaMessage::MetaField::BOOL_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
+                    try {
+                        auto &v = linb::any_cast<bool &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
+                        doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
+                    } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+                    }
+                } else if (f.fieldDataType() == MetaMessage::MetaField::CHAR_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
+                    try {
+                        auto &v = linb::any_cast<char &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
+                        doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
+                    } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+                    }
+                } else if (f.fieldDataType() == MetaMessage::MetaField::UINT8_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
+                    try {
+                        auto &v = linb::any_cast<uint8_t &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
+                        doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
+                    } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+                    }
+                } else if (f.fieldDataType() == MetaMessage::MetaField::INT8_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
+                    try {
+                        auto &v = linb::any_cast<int8_t &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
+                        doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
+                    } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+                    }
+                } else if (f.fieldDataType() == MetaMessage::MetaField::UINT16_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
+                    try {
+                        auto &v = linb::any_cast<uint16_t &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
+                        doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
+                    } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+                    }
+                } else if (f.fieldDataType() == MetaMessage::MetaField::INT16_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
+                    try {
+                        auto &v = linb::any_cast<int16_t &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
+                        doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
+                    } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+                    }
+                } else if (f.fieldDataType() == MetaMessage::MetaField::UINT32_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
+                    try {
+                        auto &v = linb::any_cast<uint32_t &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
+                        doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
+                    } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+                    }
+                } else if (f.fieldDataType() == MetaMessage::MetaField::INT32_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
+                    try {
+                        auto &v = linb::any_cast<int32_t &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
+                        doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
+                    } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+                    }
+                } else if (f.fieldDataType() == MetaMessage::MetaField::UINT64_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
+                    try {
+                        auto &v = linb::any_cast<uint64_t &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
+                        doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
+                    } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+                    }
+                } else if (f.fieldDataType() == MetaMessage::MetaField::INT64_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
+                    try {
+                        auto &v = linb::any_cast<int64_t &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
+                        doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
+                    } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+                    }
+                } else if (f.fieldDataType() == MetaMessage::MetaField::FLOAT_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
+                    try {
+                        auto &v = linb::any_cast<float &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
+                        doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
+                    } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+                    }
+                } else if (f.fieldDataType() == MetaMessage::MetaField::DOUBLE_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
+                    try {
+                        auto &v = linb::any_cast<double &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
+                        doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
+                    } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+                    }
+                } else if (((f.fieldDataType() == MetaMessage::MetaField::STRING_T) || (f.fieldDataType() == MetaMessage::MetaField::BYTES_T))
+                           && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
+                    try {
+                        auto &v = linb::any_cast<std::string &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
+                        doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
+                    } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+                    }
+                } else if (f.fieldDataType() == MetaMessage::MetaField::MESSAGE_T && (0 < m_intermediateDataRepresentation.count(f.fieldIdentifier()))) {
+                    try {
+                        auto &v = linb::any_cast<cluon::GenericMessage &>(m_intermediateDataRepresentation[f.fieldIdentifier()]);
+                        doVisit(f.fieldIdentifier(), std::move(f.fieldDataTypeName()), std::move(f.fieldName()), v, visitor);
+                    } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+                    }
+                }
+                // End processing in case of visiting specific fields.
+                if (!visitAll && (fieldId == f.fieldIdentifier())) {
+                  break;
+                }
+            }
+        }
+
+        visitor.postVisit();
+    }
+
+   private:
     MetaMessage m_metaMessage{};
     std::vector<MetaMessage> m_scopeOfMetaMessages{};
-    std::map<std::string, MetaMessage> m_mapForScopeOfMetaMessages{};
+    std::unordered_map<std::string, MetaMessage> m_mapForScopeOfMetaMessages{};
     std::string m_longName{""};
-    std::map<uint32_t, linb::any> m_intermediateDataRepresentation;
+    std::unordered_map<uint32_t, linb::any, UseUInt32ValueAsHashKey> m_intermediateDataRepresentation;
 };
 } // namespace cluon
 
@@ -7779,20 +8330,11 @@ struct isTripletForwardVisitable<cluon::GenericMessage> {
 };
 #endif
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_LCMTOGENERICMESSAGE_HPP
@@ -7846,20 +8388,11 @@ class LIBCLUON_API LCMToGenericMessage {
 } // namespace cluon
 #endif
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_OD4SESSION_HPP
@@ -7875,10 +8408,10 @@ class LIBCLUON_API LCMToGenericMessage {
 #include <chrono>
 #include <cstdint>
 #include <functional>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 namespace cluon {
@@ -8020,26 +8553,17 @@ class LIBCLUON_API OD4Session {
     std::function<void(cluon::data::Envelope &&envelope)> m_delegate{nullptr};
 
     std::mutex m_mapOfDataTriggeredDelegatesMutex{};
-    std::map<int32_t, std::function<void(cluon::data::Envelope &&envelope)>> m_mapOfDataTriggeredDelegates{};
+    std::unordered_map<int32_t, std::function<void(cluon::data::Envelope &&envelope)>, UseUInt32ValueAsHashKey> m_mapOfDataTriggeredDelegates{};
 };
 
 } // namespace cluon
 #endif
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_PLAYER_HPP
@@ -8246,26 +8770,18 @@ class LIBCLUON_API Player {
 
 #endif
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_SHAREDMEMORY_HPP
 #define CLUON_SHAREDMEMORY_HPP
 
 //#include "cluon/cluon.hpp"
+//#include "cluon/cluonDataStructures.hpp"
 
 // clang-format off
 #ifdef WIN32
@@ -8280,6 +8796,7 @@ class LIBCLUON_API Player {
 #include <cstdint>
 #include <atomic>
 #include <string>
+#include <utility>
 
 namespace cluon {
 
@@ -8303,6 +8820,11 @@ class LIBCLUON_API SharedMemory {
     ~SharedMemory() noexcept;
 
     /**
+     * @return true when this shared memory area is locked.
+     */
+    bool isLocked() const noexcept;
+
+    /**
      * This method locks the shared memory area.
      */
     void lock() noexcept;
@@ -8321,6 +8843,27 @@ class LIBCLUON_API SharedMemory {
      * This method notifies all threads waiting on the shared condition.
      */
     void notifyAll() noexcept;
+
+    /**
+     * This method sets the time stamp that can be used to
+     * express the sample time stamp of the data in residing
+     * in the shared memory.
+     *
+     * This method is only allowed when the shared memory is locked.
+     *
+     * @param ts TimeStamp.
+     * @return true if the timestamp could set; false if the shared memory was not locked.
+     */
+    bool setTimeStamp(const cluon::data::TimeStamp &ts) noexcept;
+
+    /**
+     * This method returns the sample time stamp.
+     *
+     * This method is only allowed when the shared memory is locked.
+     *
+     * @return (true, sample time stamp) or (false, 0) in case if the shared memory was not locked.
+     */
+    std::pair<bool, cluon::data::TimeStamp> getTimeStamp() noexcept;
 
    public:
     /**
@@ -8372,18 +8915,22 @@ class LIBCLUON_API SharedMemory {
 
    private:
     std::string m_name{""};
+    std::string m_nameForTimeStamping{""};
     uint32_t m_size{0};
     char *m_sharedMemory{nullptr};
     char *m_userAccessibleSharedMemory{nullptr};
     bool m_hasOnlyAttachedToSharedMemory{false};
 
     std::atomic<bool> m_broken{false};
+    std::atomic<bool> m_isLocked{false};
 
 #ifdef WIN32
     HANDLE __conditionEvent{nullptr};
     HANDLE __mutex{nullptr};
     HANDLE __sharedMemory{nullptr};
 #else
+    int32_t m_fdForTimeStamping{-1};
+
     bool m_usePOSIX{true};
 
     // Member fields for POSIX-based shared memory.
@@ -8413,20 +8960,11 @@ class LIBCLUON_API SharedMemory {
 #ifndef BEGIN_HEADER_ONLY_IMPLEMENTATION
 #define BEGIN_HEADER_ONLY_IMPLEMENTATION
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 //#include "argh/argh.h"
@@ -8452,18 +8990,9 @@ inline std::map<std::string, std::string> getCommandlineArguments(int32_t argc, 
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 //#include "cluon/MetaMessage.hpp"
@@ -8562,18 +9091,9 @@ inline void MetaMessage::accept(const std::function<void(const MetaMessage &)> &
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 //#include "cluon/MessageParser.hpp"
@@ -8913,20 +9433,11 @@ inline std::pair<std::vector<MetaMessage>, MessageParser::MessageParserErrorCode
 }
 } // namespace cluon
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 //#include "cluon/TerminateHandler.hpp"
@@ -8974,18 +9485,9 @@ inline TerminateHandler::TerminateHandler() noexcept {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 //#include "cluon/UDPSender.hpp"
@@ -9112,18 +9614,9 @@ inline std::pair<ssize_t, int32_t> UDPSender::send(std::string &&data) const noe
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 //#include "cluon/UDPReceiver.hpp"
@@ -9528,20 +10021,11 @@ inline void UDPReceiver::readFromSocket() noexcept {
 }
 } // namespace cluon
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 //#include "cluon/TCPConnection.hpp"
@@ -9814,20 +10298,11 @@ inline void TCPConnection::readFromSocket() noexcept {
 }
 } // namespace cluon
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 //#include "cluon/TCPServer.hpp"
@@ -10015,18 +10490,9 @@ inline void TCPServer::readFromSocket() noexcept {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 //#include "cluon/ToProtoVisitor.hpp"
@@ -10245,86 +10711,79 @@ inline std::size_t ToProtoVisitor::toVarInt(std::ostream &out, uint64_t v) noexc
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 //#include "cluon/FromProtoVisitor.hpp"
 
 #include <cstddef>
 #include <cstring>
+#include <utility>
 
 namespace cluon {
 
-inline void FromProtoVisitor::readBytesFromStream(std::istream &in, std::size_t bytesToReadFromStream, std::vector<char> &buffer) noexcept {
-    constexpr std::size_t CHUNK_SIZE{1024};
-    std::streamsize bufferPosition{0};
+inline void FromProtoVisitor::readBytesFromStream(std::istream &in, std::size_t bytesToReadFromStream, char *buffer) noexcept {
+    if (nullptr != buffer) {
+        const constexpr std::size_t CHUNK_SIZE{1024};
+        std::streamsize bufferPosition{0};
+        std::streamsize extractedBytes{0};
 
-    // Ensure buffer has enough space to hold the bytes.
-    buffer.reserve(bytesToReadFromStream);
-
-    while ((0 < bytesToReadFromStream) && in.good()) {
-        // clang-format off
-        in.read(&buffer[static_cast<std::size_t>(bufferPosition)], /* Flawfinder: ignore */ /* Cf. buffer.reserve(...) above.  */
-                (bytesToReadFromStream > CHUNK_SIZE) ? CHUNK_SIZE : static_cast<std::streamsize>(bytesToReadFromStream));
-        // clang-format on
-        const std::streamsize EXTRACTED_BYTES{in.gcount()};
-        bufferPosition += EXTRACTED_BYTES;
-        bytesToReadFromStream -= static_cast<std::size_t>(EXTRACTED_BYTES);
+        while ((0 < bytesToReadFromStream) && in.good()) {
+            // clang-format off
+            in.read(&buffer[static_cast<std::size_t>(bufferPosition)], /* Flawfinder: ignore */ /* Cf. buffer.reserve(...) above.  */
+                    (bytesToReadFromStream > CHUNK_SIZE) ? CHUNK_SIZE : static_cast<std::streamsize>(bytesToReadFromStream));
+            // clang-format on
+            extractedBytes = in.gcount();
+            bufferPosition += extractedBytes;
+            bytesToReadFromStream -= static_cast<std::size_t>(extractedBytes);
+        }
     }
 }
 
 inline void FromProtoVisitor::decodeFrom(std::istream &in) noexcept {
     // Reset internal states as this deserializer could be reused.
-    m_buffer.str("");
     m_mapOfKeyValues.clear();
-
     while (in.good()) {
         // First stage: Read keyFieldType (encoded as VarInt).
-        uint64_t keyFieldType{0};
-        std::size_t bytesRead{fromVarInt(in, keyFieldType)};
-
-        if (bytesRead > 0) {
+        if (0 < fromVarInt(in, m_keyFieldType)) {
             // Succeeded to read keyFieldType entry; extract information.
-            const uint32_t fieldId{static_cast<uint32_t>(keyFieldType >> 3)};
-            const ProtoConstants protoType{static_cast<ProtoConstants>(keyFieldType & 0x7)};
-
-            if (protoType == ProtoConstants::VARINT) {
-                // Directly decode VarInt value.
-                uint64_t value{0};
-                fromVarInt(in, value);
-                ProtoKeyValue pkv{fieldId, value};
-                m_mapOfKeyValues[pkv.key()] = std::move(pkv);
-            } else if (protoType == ProtoConstants::EIGHT_BYTES) {
-                constexpr std::size_t BYTES_TO_READ_FROM_STREAM{sizeof(double)};
-                // Create map entry for Proto key/value here to avoid copying data later.
-                ProtoKeyValue pkv{fieldId, ProtoConstants::EIGHT_BYTES, BYTES_TO_READ_FROM_STREAM};
-                readBytesFromStream(in, BYTES_TO_READ_FROM_STREAM, pkv.rawBuffer());
-                m_mapOfKeyValues[pkv.key()] = std::move(pkv);
-            } else if (protoType == ProtoConstants::LENGTH_DELIMITED) {
-                uint64_t length{0};
-                fromVarInt(in, length);
-                const std::size_t BYTES_TO_READ_FROM_STREAM{static_cast<std::size_t>(length)};
-                // Create map entry for Proto key/value here to avoid copying data later.
-                ProtoKeyValue pkv{fieldId, ProtoConstants::LENGTH_DELIMITED, BYTES_TO_READ_FROM_STREAM};
-                readBytesFromStream(in, BYTES_TO_READ_FROM_STREAM, pkv.rawBuffer());
-                m_mapOfKeyValues[pkv.key()] = std::move(pkv);
-            } else if (protoType == ProtoConstants::FOUR_BYTES) {
-                constexpr std::size_t BYTES_TO_READ_FROM_STREAM{sizeof(float)};
-                // Create map entry for Proto key/value here to avoid copying data later.
-                ProtoKeyValue pkv{fieldId, ProtoConstants::FOUR_BYTES, BYTES_TO_READ_FROM_STREAM};
-                readBytesFromStream(in, BYTES_TO_READ_FROM_STREAM, pkv.rawBuffer());
-                m_mapOfKeyValues[pkv.key()] = std::move(pkv);
+            m_protoType = static_cast<ProtoConstants>(m_keyFieldType & 0x7);
+            m_fieldId = static_cast<uint32_t>(m_keyFieldType >> 3);
+            switch (m_protoType) {
+                case ProtoConstants::VARINT:
+                {
+                    // Directly decode VarInt value.
+                    fromVarInt(in, m_value);
+                    m_mapOfKeyValues.emplace(m_fieldId, linb::any(m_value));
+                }
+                break;
+                case ProtoConstants::EIGHT_BYTES:
+                {
+                    readBytesFromStream(in, sizeof(double), m_doubleValue.buffer.data());
+                    m_doubleValue.uint64Value = le64toh(m_doubleValue.uint64Value);
+                    m_mapOfKeyValues.emplace(m_fieldId, linb::any(m_doubleValue.doubleValue));
+                }
+                break;
+                case ProtoConstants::FOUR_BYTES:
+                {
+                    readBytesFromStream(in, sizeof(float), m_floatValue.buffer.data());
+                    m_floatValue.uint32Value = le32toh(m_floatValue.uint32Value);
+                    m_mapOfKeyValues.emplace(m_fieldId, linb::any(m_floatValue.floatValue));
+                }
+                break;
+                case ProtoConstants::LENGTH_DELIMITED:
+                {
+                    fromVarInt(in, m_value);
+                    const std::size_t BYTES_TO_READ_FROM_STREAM{static_cast<std::size_t>(m_value)};
+                    if (m_stringValue.capacity() < BYTES_TO_READ_FROM_STREAM) {
+                        m_stringValue.reserve(BYTES_TO_READ_FROM_STREAM);
+                    }
+                    readBytesFromStream(in, BYTES_TO_READ_FROM_STREAM, m_stringValue.data());
+                    m_mapOfKeyValues.emplace(m_fieldId, linb::any(std::string(m_stringValue.data(), static_cast<std::size_t>(m_value))));
+                }
+                break;
             }
         }
     }
@@ -10332,90 +10791,8 @@ inline void FromProtoVisitor::decodeFrom(std::istream &in) noexcept {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-inline FromProtoVisitor::ProtoKeyValue::ProtoKeyValue() noexcept
-    : m_key{0}
-    , m_type{ProtoConstants::VARINT}
-    , m_length{0}
-    , m_value{}
-    , m_varIntValue{0} {}
-
-inline FromProtoVisitor::ProtoKeyValue::ProtoKeyValue(uint32_t key, ProtoConstants type, uint64_t length) noexcept
-    : m_key{key}
-    , m_type{type}
-    , m_length{length}
-    , m_value(static_cast<std::size_t>(length))
-    , m_varIntValue{0} {}
-
-inline FromProtoVisitor::ProtoKeyValue::ProtoKeyValue(uint32_t key, uint64_t value) noexcept
-    : m_key{key}
-    , m_type{ProtoConstants::VARINT}
-    , m_length{0}
-    , m_value{}
-    , m_varIntValue{value} {}
-
-inline uint32_t FromProtoVisitor::ProtoKeyValue::key() const noexcept {
-    return m_key;
-}
-
-inline ProtoConstants FromProtoVisitor::ProtoKeyValue::type() const noexcept {
-    return m_type;
-}
-
-inline uint64_t FromProtoVisitor::ProtoKeyValue::length() const noexcept {
-    return m_length;
-}
-
-inline uint64_t FromProtoVisitor::ProtoKeyValue::valueAsVarInt() const noexcept {
-    uint64_t retVal{0};
-    if (type() == ProtoConstants::VARINT) {
-        retVal = m_varIntValue;
-    }
-    return retVal;
-}
-
-inline float FromProtoVisitor::ProtoKeyValue::valueAsFloat() const noexcept {
-    union FloatValue {
-        uint32_t uint32Value;
-        float floatValue{0};
-    } retVal;
-    if (!m_value.empty() && (length() == sizeof(float)) && (m_value.size() == sizeof(float)) && (type() == ProtoConstants::FOUR_BYTES)) {
-        std::memmove(&retVal.uint32Value, &m_value[0], sizeof(float));
-        retVal.uint32Value = le32toh(retVal.uint32Value);
-    }
-    return retVal.floatValue;
-}
-
-inline double FromProtoVisitor::ProtoKeyValue::valueAsDouble() const noexcept {
-    union DoubleValue {
-        uint64_t uint64Value;
-        double doubleValue{0};
-    } retVal;
-    if (!m_value.empty() && (length() == sizeof(double)) && (m_value.size() == sizeof(double)) && (type() == ProtoConstants::EIGHT_BYTES)) {
-        std::memmove(&retVal.uint64Value, &m_value[0], sizeof(double));
-        retVal.uint64Value = le64toh(retVal.uint64Value);
-    }
-    return retVal.doubleValue;
-}
-
-inline std::string FromProtoVisitor::ProtoKeyValue::valueAsString() const noexcept {
-    std::string retVal;
-    if (!m_value.empty() && (length() > 0) && (type() == ProtoConstants::LENGTH_DELIMITED)) {
-        // Create string from buffer.
-        retVal = std::string(m_value.data(), static_cast<std::size_t>(m_length));
-    }
-    return retVal;
-}
-
-inline std::vector<char> &FromProtoVisitor::ProtoKeyValue::rawBuffer() noexcept {
-    return m_value;
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
 inline FromProtoVisitor &FromProtoVisitor::operator=(const FromProtoVisitor &other) noexcept {
-    m_buffer.str(other.m_buffer.str());
     m_mapOfKeyValues = other.m_mapOfKeyValues;
-
     return *this;
 }
 
@@ -10432,112 +10809,190 @@ inline void FromProtoVisitor::postVisit() noexcept {}
 inline void FromProtoVisitor::visit(uint32_t id, std::string &&typeName, std::string &&name, bool &v) noexcept {
     (void)typeName;
     (void)name;
-    if (m_mapOfKeyValues.count(id) > 0) {
-        v = (0 != m_mapOfKeyValues[id].valueAsVarInt());
+    if (m_callToDecodeFromWithDirectVisit) {
+        v = (0 != m_value);
+    }
+    else if (m_mapOfKeyValues.count(id) > 0) {
+        try {
+            v = (0 != linb::any_cast<uint64_t>(m_mapOfKeyValues[id]));
+        } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+        }
     }
 }
 
 inline void FromProtoVisitor::visit(uint32_t id, std::string &&typeName, std::string &&name, char &v) noexcept {
     (void)typeName;
     (void)name;
-    if (m_mapOfKeyValues.count(id) > 0) {
-        uint64_t _v = m_mapOfKeyValues[id].valueAsVarInt();
-        v           = static_cast<char>(_v);
+    if (m_callToDecodeFromWithDirectVisit) {
+        v = static_cast<char>(m_value);
+    }
+    else if (m_mapOfKeyValues.count(id) > 0) {
+        try {
+            uint64_t _v = linb::any_cast<uint64_t>(m_mapOfKeyValues[id]);
+            v           = static_cast<char>(_v);
+        } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+        }
     }
 }
 
 inline void FromProtoVisitor::visit(uint32_t id, std::string &&typeName, std::string &&name, int8_t &v) noexcept {
     (void)typeName;
     (void)name;
-    if (m_mapOfKeyValues.count(id) > 0) {
-        uint64_t _v = m_mapOfKeyValues[id].valueAsVarInt();
-        v           = static_cast<int8_t>(fromZigZag8(static_cast<uint8_t>(_v)));
+    if (m_callToDecodeFromWithDirectVisit) {
+        v = static_cast<int8_t>(fromZigZag8(static_cast<uint8_t>(m_value)));
+    }
+    else if (m_mapOfKeyValues.count(id) > 0) {
+        try {
+            uint64_t _v = linb::any_cast<uint64_t>(m_mapOfKeyValues[id]);
+            v           = static_cast<int8_t>(fromZigZag8(static_cast<uint8_t>(_v)));
+        } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+        }
     }
 }
 
 inline void FromProtoVisitor::visit(uint32_t id, std::string &&typeName, std::string &&name, uint8_t &v) noexcept {
     (void)typeName;
     (void)name;
-    if (m_mapOfKeyValues.count(id) > 0) {
-        uint64_t _v = m_mapOfKeyValues[id].valueAsVarInt();
-        v           = static_cast<uint8_t>(_v);
+    if (m_callToDecodeFromWithDirectVisit) {
+        v = static_cast<uint8_t>(m_value);
+    }
+    else if (m_mapOfKeyValues.count(id) > 0) {
+        try {
+            uint64_t _v = linb::any_cast<uint64_t>(m_mapOfKeyValues[id]);
+            v           = static_cast<uint8_t>(_v);
+        } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+        }
     }
 }
 
 inline void FromProtoVisitor::visit(uint32_t id, std::string &&typeName, std::string &&name, int16_t &v) noexcept {
     (void)typeName;
     (void)name;
-    if (m_mapOfKeyValues.count(id) > 0) {
-        uint64_t _v = m_mapOfKeyValues[id].valueAsVarInt();
-        v           = static_cast<int16_t>(fromZigZag16(static_cast<uint16_t>(_v)));
+    if (m_callToDecodeFromWithDirectVisit) {
+        v = static_cast<int16_t>(fromZigZag16(static_cast<uint16_t>(m_value)));
+    }
+    else if (m_mapOfKeyValues.count(id) > 0) {
+        try {
+            uint64_t _v = linb::any_cast<uint64_t>(m_mapOfKeyValues[id]);
+            v           = static_cast<int16_t>(fromZigZag16(static_cast<uint16_t>(_v)));
+        } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+        }
     }
 }
 
 inline void FromProtoVisitor::visit(uint32_t id, std::string &&typeName, std::string &&name, uint16_t &v) noexcept {
     (void)typeName;
     (void)name;
-    if (m_mapOfKeyValues.count(id) > 0) {
-        uint64_t _v = m_mapOfKeyValues[id].valueAsVarInt();
-        v           = static_cast<uint16_t>(_v);
+    if (m_callToDecodeFromWithDirectVisit) {
+        v = static_cast<uint16_t>(m_value);
+    }
+    else if (m_mapOfKeyValues.count(id) > 0) {
+        try {
+            uint64_t _v = linb::any_cast<uint64_t>(m_mapOfKeyValues[id]);
+            v           = static_cast<uint16_t>(_v);
+        } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+        }
     }
 }
 
 inline void FromProtoVisitor::visit(uint32_t id, std::string &&typeName, std::string &&name, int32_t &v) noexcept {
     (void)typeName;
     (void)name;
-    if (m_mapOfKeyValues.count(id) > 0) {
-        uint64_t _v = m_mapOfKeyValues[id].valueAsVarInt();
-        v           = static_cast<int32_t>(fromZigZag32(static_cast<uint32_t>(_v)));
+    if (m_callToDecodeFromWithDirectVisit) {
+        v = static_cast<int32_t>(fromZigZag32(static_cast<uint32_t>(m_value)));
+    }
+    else if (m_mapOfKeyValues.count(id) > 0) {
+        try {
+            uint64_t _v = linb::any_cast<uint64_t>(m_mapOfKeyValues[id]);
+            v           = static_cast<int32_t>(fromZigZag32(static_cast<uint32_t>(_v)));
+        } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+        }
     }
 }
 
 inline void FromProtoVisitor::visit(uint32_t id, std::string &&typeName, std::string &&name, uint32_t &v) noexcept {
     (void)typeName;
     (void)name;
-    if (m_mapOfKeyValues.count(id) > 0) {
-        uint64_t _v = m_mapOfKeyValues[id].valueAsVarInt();
-        v           = static_cast<uint32_t>(_v);
+    if (m_callToDecodeFromWithDirectVisit) {
+        v = static_cast<uint32_t>(m_value);
+    }
+    else if (m_mapOfKeyValues.count(id) > 0) {
+        try {
+            uint64_t _v = linb::any_cast<uint64_t>(m_mapOfKeyValues[id]);
+            v           = static_cast<uint32_t>(_v);
+        } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+        }
     }
 }
 
 inline void FromProtoVisitor::visit(uint32_t id, std::string &&typeName, std::string &&name, int64_t &v) noexcept {
     (void)typeName;
     (void)name;
-    if (m_mapOfKeyValues.count(id) > 0) {
-        uint64_t _v = m_mapOfKeyValues[id].valueAsVarInt();
-        v           = static_cast<int64_t>(fromZigZag64(_v));
+    if (m_callToDecodeFromWithDirectVisit) {
+        v = static_cast<int64_t>(fromZigZag64(static_cast<uint64_t>(m_value)));
+    }
+    else if (m_mapOfKeyValues.count(id) > 0) {
+        try {
+            uint64_t _v = linb::any_cast<uint64_t>(m_mapOfKeyValues[id]);
+            v           = static_cast<int64_t>(fromZigZag64(_v));
+        } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+        }
     }
 }
 
 inline void FromProtoVisitor::visit(uint32_t id, std::string &&typeName, std::string &&name, uint64_t &v) noexcept {
     (void)typeName;
     (void)name;
-    if (m_mapOfKeyValues.count(id) > 0) {
-        v = m_mapOfKeyValues[id].valueAsVarInt();
+    if (m_callToDecodeFromWithDirectVisit) {
+        v = m_value;
+    }
+    else if (m_mapOfKeyValues.count(id) > 0) {
+        try {
+            v = linb::any_cast<uint64_t>(m_mapOfKeyValues[id]);
+        } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+        }
     }
 }
 
 inline void FromProtoVisitor::visit(uint32_t id, std::string &&typeName, std::string &&name, float &v) noexcept {
     (void)typeName;
     (void)name;
-    if (m_mapOfKeyValues.count(id) > 0) {
-        v = m_mapOfKeyValues[id].valueAsFloat();
+    if (m_callToDecodeFromWithDirectVisit) {
+        v = m_floatValue.floatValue;
+    }
+    else if (m_mapOfKeyValues.count(id) > 0) {
+        try {
+            v = linb::any_cast<float>(m_mapOfKeyValues[id]);
+        } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+        }
     }
 }
 
 inline void FromProtoVisitor::visit(uint32_t id, std::string &&typeName, std::string &&name, double &v) noexcept {
     (void)typeName;
     (void)name;
-    if (m_mapOfKeyValues.count(id) > 0) {
-        v = m_mapOfKeyValues[id].valueAsDouble();
+    if (m_callToDecodeFromWithDirectVisit) {
+        v = m_doubleValue.doubleValue;
+    }
+    else if (m_mapOfKeyValues.count(id) > 0) {
+        try {
+            v = linb::any_cast<double>(m_mapOfKeyValues[id]);
+        } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+        }
     }
 }
 
 inline void FromProtoVisitor::visit(uint32_t id, std::string &&typeName, std::string &&name, std::string &v) noexcept {
     (void)typeName;
     (void)name;
-    if (m_mapOfKeyValues.count(id) > 0) {
-        v = m_mapOfKeyValues[id].valueAsString();
+    if (m_callToDecodeFromWithDirectVisit) {
+        v = std::string(m_stringValue.data(), static_cast<std::size_t>(m_value));
+    }
+    else if (m_mapOfKeyValues.count(id) > 0) {
+        try {
+            v = linb::any_cast<std::string>(m_mapOfKeyValues[id]);
+        } catch (const linb::bad_any_cast &) { // LCOV_EXCL_LINE
+        }
     }
 }
 
@@ -10567,11 +11022,12 @@ inline std::size_t FromProtoVisitor::fromVarInt(std::istream &in, uint64_t &valu
     constexpr uint64_t MSB   = 0x80;
 
     std::size_t size = 0;
+    uint64_t C{0};
     while (in.good()) {
-        const auto C     = in.get();
-        const uint64_t B = static_cast<uint64_t>(C) & MASK;
-        value |= B << (SHIFT * size++);
-        if (!(static_cast<uint64_t>(C) & MSB)) { // NOLINT
+        auto x = in.get();
+        C = static_cast<uint64_t>(x);
+        value |= (C & MASK) << (SHIFT * size++);
+        if (!(C & MSB)) { // NOLINT
             break;
         }
     }
@@ -10582,18 +11038,9 @@ inline std::size_t FromProtoVisitor::fromVarInt(std::istream &in, uint64_t &valu
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 // clang-format off
@@ -10836,18 +11283,9 @@ inline void FromLCMVisitor::calculateHash(const std::string &s) noexcept {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 // clang-format off
@@ -11278,20 +11716,11 @@ inline void FromMsgPackVisitor::visit(uint32_t id, std::string &&typeName, std::
 
 } // namespace cluon
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 //#include "cluon/FromJSONVisitor.hpp"
@@ -11609,18 +12038,9 @@ inline void FromJSONVisitor::visit(uint32_t id, std::string &&typeName, std::str
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 //#include "cluon/GenericMessage.hpp"
@@ -11739,7 +12159,7 @@ inline MetaMessage GenericMessage::GenericMessageVisitor::metaMessage() const no
     return m_metaMessage;
 }
 
-inline std::map<uint32_t, linb::any> GenericMessage::GenericMessageVisitor::intermediateDataRepresentation() const noexcept {
+inline std::unordered_map<uint32_t, linb::any, UseUInt32ValueAsHashKey> GenericMessage::GenericMessageVisitor::intermediateDataRepresentation() const noexcept {
     return m_intermediateDataRepresentation;
 }
 
@@ -12021,18 +12441,9 @@ inline void GenericMessage::createFrom(const MetaMessage &mm, const std::vector<
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 //#include "cluon/ToJSONVisitor.hpp"
@@ -12193,18 +12604,9 @@ inline std::string ToJSONVisitor::encodeBase64(const std::string &input) noexcep
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 //#include "cluon/ToCSVVisitor.hpp"
@@ -12392,18 +12794,9 @@ inline void ToCSVVisitor::visit(uint32_t id, std::string &&typeName, std::string
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 // clang-format off
@@ -12598,20 +12991,11 @@ inline void ToLCMVisitor::calculateHash(const std::string &s) noexcept {
 
 } // namespace cluon
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 //#include "cluon/LCMToGenericMessage.hpp"
@@ -12722,18 +13106,9 @@ inline cluon::GenericMessage LCMToGenericMessage::getGenericMessage(const std::s
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 // clang-format off
@@ -12995,20 +13370,11 @@ inline void ToMsgPackVisitor::visit(uint32_t id, std::string &&typeName, std::st
 
 } // namespace cluon
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 //#include "cluon/OD4Session.hpp"
@@ -13135,18 +13501,9 @@ inline bool OD4Session::isRunning() noexcept {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 //#include "cluon/ToODVDVisitor.hpp"
@@ -13281,18 +13638,9 @@ inline void ToODVDVisitor::visit(uint32_t id, std::string &&typeName, std::strin
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 //#include "cluon/EnvelopeConverter.hpp"
@@ -13301,9 +13649,9 @@ inline void ToODVDVisitor::visit(uint32_t id, std::string &&typeName, std::strin
 //#include "cluon/FromProtoVisitor.hpp"
 //#include "cluon/GenericMessage.hpp"
 //#include "cluon/MessageParser.hpp"
+//#include "cluon/Time.hpp"
 //#include "cluon/ToJSONVisitor.hpp"
 //#include "cluon/ToProtoVisitor.hpp"
-//#include "cluon/Time.hpp"
 //#include "cluon/any/any.hpp"
 
 #include <algorithm>
@@ -13351,11 +13699,9 @@ inline std::string EnvelopeConverter::getJSONFromProtoEncodedEnvelope(const std:
         }
 
         if (0 == envelope.dataType()) {
-            // Directly decoding complete OD4 container failed, try decoding
-            // without header.
+            // Directly decoding complete OD4 container failed, try decoding without header.
             cluon::FromProtoVisitor protoDecoder;
-            protoDecoder.decodeFrom(sstr);
-            envelope.accept(protoDecoder);
+            protoDecoder.decodeFrom(sstr, envelope);
         }
 
         retVal = getJSONFromEnvelope(envelope);
@@ -13442,10 +13788,7 @@ inline std::string EnvelopeConverter::getProtoEncodedEnvelopeFromJSON(const std:
         gm.accept(protoEncoder);
 
         cluon::data::Envelope env;
-        env.dataType(messageIdentifier)
-           .serializedData(protoEncoder.encodedData())
-           .senderStamp(senderStamp)
-           .sampleTimeStamp(sampleTimeStamp);
+        env.dataType(messageIdentifier).serializedData(protoEncoder.encodedData()).senderStamp(senderStamp).sampleTimeStamp(sampleTimeStamp);
 
         retVal = cluon::serializeEnvelope(std::move(env));
     }
@@ -13454,20 +13797,11 @@ inline std::string EnvelopeConverter::getProtoEncodedEnvelopeFromJSON(const std:
 
 } // namespace cluon
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 //#include "cluon/Player.hpp"
@@ -13895,20 +14229,11 @@ inline float Player::checkRefillingCache(const uint32_t &numberOfEntries, float 
 
 } // namespace cluon
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 //#include "cluon/SharedMemory.hpp"
@@ -13924,11 +14249,13 @@ inline float Player::checkRefillingCache(const uint32_t &numberOfEntries, float 
     #include <sys/sem.h>
     #include <sys/shm.h>
     #include <sys/stat.h>
+    #include <sys/time.h>
     #include <sys/types.h>
     #include <unistd.h>
 #endif
 // clang-format on
 
+#include <cerrno>
 #include <cstring>
 #include <iostream>
 #include <fstream>
@@ -13965,15 +14292,31 @@ inline SharedMemory::SharedMemory(const std::string &name, uint32_t size) noexce
         m_usePOSIX                           = ((nullptr != CLUON_SHAREDMEMORY_POSIX) && (CLUON_SHAREDMEMORY_POSIX[0] == '1'));
         std::clog << "[cluon::SharedMemory] Using " << (m_usePOSIX ? "POSIX" : "SysV") << " implementation." << std::endl;
 #endif
-        // For NetBSD and OpenBSD or for the SysV-based implementation, we put all token files to /tmp.
-        if (!m_usePOSIX && (0 != n.find("/tmp"))) {
-            m_name = "/tmp" + m_name;
+        // Define filename for timestamping.
+        if (0 != n.find("/tmp")) {
+            m_nameForTimeStamping = "/tmp" + m_name;
+
+            // For NetBSD and OpenBSD or for the SysV-based implementation, we put all token files to /tmp.
+            if (!m_usePOSIX) {
+                m_name = m_nameForTimeStamping;
+            }
         }
 #endif
 
-        m_name += n;
-        if (m_name.size() > MAX_LENGTH_NAME) {
-            m_name = m_name.substr(0, MAX_LENGTH_NAME);
+        // Name of the shared memory.
+        {
+            m_name += n;
+            if (m_name.size() > MAX_LENGTH_NAME) {
+                m_name = m_name.substr(0, MAX_LENGTH_NAME);
+            }
+        }
+
+        // Name of the file for timestamping.
+        {
+            m_nameForTimeStamping += n;
+            if (m_nameForTimeStamping.size() > MAX_LENGTH_NAME) {
+                m_nameForTimeStamping = m_nameForTimeStamping.substr(0, MAX_LENGTH_NAME);
+            }
         }
 
 #ifdef WIN32
@@ -14000,6 +14343,10 @@ inline SharedMemory::~SharedMemory() noexcept {
 #endif
 }
 
+inline bool SharedMemory::isLocked() const noexcept {
+    return m_isLocked.load();
+}
+
 inline void SharedMemory::lock() noexcept {
 #ifdef WIN32
     lockWIN32();
@@ -14010,6 +14357,7 @@ inline void SharedMemory::lock() noexcept {
         lockSysV();
     }
 #endif
+    m_isLocked.store(true);
 }
 
 inline void SharedMemory::unlock() noexcept {
@@ -14022,6 +14370,7 @@ inline void SharedMemory::unlock() noexcept {
         unlockSysV();
     }
 #endif
+    m_isLocked.store(false);
 }
 
 inline void SharedMemory::wait() noexcept {
@@ -14046,6 +14395,69 @@ inline void SharedMemory::notifyAll() noexcept {
         notifyAllSysV();
     }
 #endif
+}
+
+inline bool SharedMemory::setTimeStamp(const cluon::data::TimeStamp &ts) noexcept {
+    bool retVal{false};
+
+#ifdef WIN32
+    (void)ts;
+#else
+    if ((retVal = isLocked())) {
+#ifdef __APPLE__
+        struct timeval accessedTime;
+        accessedTime.tv_sec = 0;
+        accessedTime.tv_usec = 0;
+
+        struct timeval modifiedTime;
+        modifiedTime.tv_sec = ts.seconds();
+        modifiedTime.tv_usec = ts.microseconds();
+
+        struct timeval times[2]{accessedTime, modifiedTime};
+        if (0 != futimes(m_fdForTimeStamping, times)) {
+            std::cerr << "[cluon::SharedMemory] Failed to set time stamp: '" << strerror(errno) << "' (" << errno << "): " << std::endl;
+            retVal = false;
+        }
+#else
+        struct timespec accessedTime;
+        accessedTime.tv_sec = 0;
+        accessedTime.tv_nsec = UTIME_OMIT;
+
+        struct timespec modifiedTime;
+        modifiedTime.tv_sec = ts.seconds();
+        modifiedTime.tv_nsec = ts.microseconds()*1000;
+
+        struct timespec times[2]{accessedTime, modifiedTime};
+        if (0 != futimens(m_fdForTimeStamping, times)) {
+            std::cerr << "[cluon::SharedMemory] Failed to set time stamp: '" << strerror(errno) << "' (" << errno << "): " << std::endl; // LCOV_EXCL_LINE
+            retVal = false; // LCOV_EXCL_LINE
+        }
+#endif
+    }
+#endif
+
+    return retVal;
+}
+
+inline std::pair<bool, cluon::data::TimeStamp> SharedMemory::getTimeStamp() noexcept {
+    bool retVal{false};
+    cluon::data::TimeStamp sampleTimeStamp;
+
+#ifndef WIN32
+    if ((retVal = isLocked())) {
+        struct stat fileStatus;
+        fstat(m_fdForTimeStamping, &fileStatus);
+#ifdef __APPLE__
+        sampleTimeStamp.seconds(static_cast<int32_t>(fileStatus.st_mtimespec.tv_sec))
+                       .microseconds(static_cast<int32_t>(fileStatus.st_mtimespec.tv_nsec/1000));
+#else
+        sampleTimeStamp.seconds(static_cast<int32_t>(fileStatus.st_mtim.tv_sec))
+                       .microseconds(static_cast<int32_t>(fileStatus.st_mtim.tv_nsec/1000));
+#endif
+    }
+#endif
+
+    return std::make_pair(retVal, sampleTimeStamp);
 }
 
 inline bool SharedMemory::valid() noexcept {
@@ -14280,8 +14692,9 @@ inline void SharedMemory::initPOSIX() noexcept {
 
     m_fd = ::shm_open(m_name.c_str(), flags, S_IRUSR | S_IWUSR);
     if (-1 == m_fd) {
-        std::cerr << "[cluon::SharedMemory (POSIX)] Failed to open shared memory '" << m_name << "': " << ::strerror(errno) << " (" << errno << ")"
-                  << std::endl;
+// clang-format off
+        std::cerr << "[cluon::SharedMemory (POSIX)] Failed to open shared memory '" << m_name << "': " << ::strerror(errno) << " (" << errno << ")" << std::endl;
+// clang-format on
         // Try to remove existing shared memory segment and try again.
         if ((flags & O_CREAT) == O_CREAT) {
             std::clog << "[cluon::SharedMemory (POSIX)] Trying to remove existing shared memory '" << m_name << "' and trying again... ";
@@ -14304,9 +14717,9 @@ inline void SharedMemory::initPOSIX() noexcept {
         if (0 < m_size) {
             retVal = (0 == ::ftruncate(m_fd, static_cast<off_t>(sizeof(SharedMemoryHeader) + m_size)));
             if (!retVal) {
-                std::cerr << "[cluon::SharedMemory (POSIX)] Failed to truncate '" << m_name << "': " // LCOV_EXCL_LINE
-                          << ::strerror(errno) << " (" << errno << ")" // LCOV_EXCL_LINE
-                          << std::endl; // LCOV_EXCL_LINE
+// clang-format off // LCOV_EXCL_LINE
+                std::cerr << "[cluon::SharedMemory (POSIX)] Failed to truncate '" << m_name << "': " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format on // LCOV_EXCL_LINE
             }
         }
 
@@ -14352,9 +14765,9 @@ inline void SharedMemory::initPOSIX() noexcept {
 
                     // Now, as we know the real size, unmap the first mapping that did not know the size.
                     if (::munmap(m_sharedMemory, sizeof(SharedMemoryHeader))) {
-                        std::cerr << "[cluon::SharedMemory (POSIX)] Failed to unmap shared memory: " // LCOV_EXCL_LINE
-                                  << ::strerror(errno) << " (" << errno << ")" // LCOV_EXCL_LINE
-                                  << std::endl; // LCOV_EXCL_LINE
+// clang-format off // LCOV_EXCL_LINE
+                        std::cerr << "[cluon::SharedMemory (POSIX)] Failed to unmap shared memory: " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format on // LCOV_EXCL_LINE
                     }
 
                     // Invalidate all pointers.
@@ -14367,9 +14780,10 @@ inline void SharedMemory::initPOSIX() noexcept {
                         m_sharedMemoryHeader = reinterpret_cast<SharedMemoryHeader *>(m_sharedMemory);
                     }
                 }
-            } else {                                                                                                                         // LCOV_EXCL_LINE
-                std::cerr << "[cluon::SharedMemory (POSIX)] Failed to map '" << m_name << "': " << ::strerror(errno) << " (" << errno << ")" // LCOV_EXCL_LINE
-                          << std::endl;                                                                                                      // LCOV_EXCL_LINE
+            } else { // LCOV_EXCL_LINE
+// clang-format off // LCOV_EXCL_LINE
+                std::cerr << "[cluon::SharedMemory (POSIX)] Failed to map '" << m_name << "': " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format on // LCOV_EXCL_LINE
             }
 
             // If the shared memory segment is correctly available, store the pointer for the user data.
@@ -14382,15 +14796,30 @@ inline void SharedMemory::initPOSIX() noexcept {
                               << ::strerror(errno) << " (" << errno << ")" << std::endl;         // LCOV_EXCL_LINE
                 }
             }
-        } else {                                                                                                                               // LCOV_EXCL_LINE
-            if (-1 != m_fd) {                                                                                                                  // LCOV_EXCL_LINE
-                if (-1 == ::shm_unlink(m_name.c_str())) {                                                                                      // LCOV_EXCL_LINE
-                    std::cerr << "[cluon::SharedMemory (POSIX)] Failed to unlink shared memory: " << ::strerror(errno) << " (" << errno << ")" // LCOV_EXCL_LINE
-                              << std::endl;                                                                                                    // LCOV_EXCL_LINE
+        } else { // LCOV_EXCL_LINE
+            if (-1 != m_fd) { // LCOV_EXCL_LINE
+                if (-1 == ::shm_unlink(m_name.c_str())) { // LCOV_EXCL_LINE
+// clang-format off // LCOV_EXCL_LINE
+                    std::cerr << "[cluon::SharedMemory (POSIX)] Failed to unlink shared memory: " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format on // LCOV_EXCL_LINE
                 }
             }
             m_fd = -1; // LCOV_EXCL_LINE
         }
+    }
+#endif
+
+#ifdef __linux__
+    // On Linux, the POSIX shared memory lives in /dev/shm and we have a valid
+    // file descriptor to use for timestamping.
+    if (-1 != m_fd) {
+        m_fdForTimeStamping = m_fd;
+    }
+#else
+    // On *BSDs, the POSIX shared memory lives not in /dev/shm and we have
+    // need to use a separate file for timestamping.
+    if (-1 != m_fd) {
+        m_fdForTimeStamping = ::open(m_nameForTimeStamping.c_str(), O_CREAT|O_RDONLY, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
     }
 #endif
 }
@@ -14404,12 +14833,23 @@ inline void SharedMemory::deinitPOSIX() noexcept {
         ::pthread_mutex_destroy(&(m_sharedMemoryHeader->__mutex));
     }
     if ((nullptr != m_sharedMemory) && ::munmap(m_sharedMemory, sizeof(SharedMemoryHeader) + m_size)) {
-        std::cerr << "[cluon::SharedMemory (POSIX)] Failed to unmap shared memory: " // LCOV_EXCL_LINE
-                  << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format off // LCOV_EXCL_LINE
+        std::cerr << "[cluon::SharedMemory (POSIX)] Failed to unmap shared memory: " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format on // LCOV_EXCL_LINE
     }
     if (!m_hasOnlyAttachedToSharedMemory && (-1 != m_fd) && (-1 == ::shm_unlink(m_name.c_str()) && (ENOENT != errno))) {
-        std::cerr << "[cluon::SharedMemory (POSIX)] Failed to unlink shared memory: " // LCOV_EXCL_LINE
-                  << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format off // LCOV_EXCL_LINE
+        std::cerr << "[cluon::SharedMemory (POSIX)] Failed to unlink shared memory: " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format on // LCOV_EXCL_LINE
+    }
+#endif
+
+#ifndef __linux__
+    // On *BSDs, the POSIX shared memory lives not in /dev/shm and we have
+    // used a separate file for timestamping.
+    if (-1 != m_fdForTimeStamping) {
+        ::close(m_fdForTimeStamping);
+        ::unlink(m_nameForTimeStamping.c_str());
     }
 #endif
 }
@@ -14419,11 +14859,10 @@ inline void SharedMemory::lockPOSIX() noexcept {
     if (nullptr != m_sharedMemoryHeader) {
         auto retVal = ::pthread_mutex_lock(&(m_sharedMemoryHeader->__mutex));
         if (EOWNERDEAD == retVal) {
-            std::cerr << "[cluon::SharedMemory (POSIX)] pthread_mutex_lock returned for EOWNERDEAD for mutex in shared memory '" << m_name // LCOV_EXCL_LINE
-                      << "': " << ::strerror(errno)                                                                                        // LCOV_EXCL_LINE
-                      << " (" << errno << ")" << std::endl;                                                                                // LCOV_EXCL_LINE
-        }
-        else if (0 != retVal) {
+// clang-format off // LCOV_EXCL_LINE
+            std::cerr << "[cluon::SharedMemory (POSIX)] pthread_mutex_lock returned for EOWNERDEAD for mutex in shared memory '" << m_name << "': " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format on // LCOV_EXCL_LINE
+        } else if (0 != retVal) {
             m_broken.store(true); // LCOV_EXCL_LINE
         }
     }
@@ -14513,7 +14952,9 @@ inline void SharedMemory::initSysV() noexcept {
     if (tokenFileExisting) {
         m_shmKeySysV = ::ftok(m_name.c_str(), ID_SHM);
         if (-1 == m_shmKeySysV) {
+// clang-format off // LCOV_EXCL_LINE
             std::cerr << "[cluon::SharedMemory (SysV)] Key for shared memory could not be created: " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format on // LCOV_EXCL_LINE
         } else {
             if (!m_hasOnlyAttachedToSharedMemory) {
                 // The caller wants to create a shared memory segment.
@@ -14523,16 +14964,18 @@ inline void SharedMemory::initSysV() noexcept {
                 // IPC_CREAT flag. On a clean environment, this call must fail
                 // as there should not be any shared memory segments left.
                 {
-                    int orphanedSharedMemoryIDSysV = ::shmget(m_shmKeySysV, 0, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH);
+                    int orphanedSharedMemoryIDSysV = ::shmget(m_shmKeySysV, 0, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
                     if (!(orphanedSharedMemoryIDSysV < 0)) {
                         if (::shmctl(orphanedSharedMemoryIDSysV, IPC_RMID, 0)) {
+// clang-format off // LCOV_EXCL_LINE
                             std::cerr << "[cluon::SharedMemory (SysV)] Existing shared memory (0x" << std::hex << m_shmKeySysV << std::dec << ") found; removing failed." << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format on // LCOV_EXCL_LINE
                         }
                     }
                 }
 
                 // Now, create the shared memory segment.
-                m_sharedMemoryIDSysV = ::shmget(m_shmKeySysV, m_size, IPC_CREAT | IPC_EXCL | S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH);
+                m_sharedMemoryIDSysV = ::shmget(m_shmKeySysV, m_size, IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
                 if (-1 != m_sharedMemoryIDSysV) {
                     m_sharedMemory = reinterpret_cast<char *>(::shmat(m_sharedMemoryIDSysV, nullptr, 0));
 #pragma GCC diagnostic push
@@ -14540,17 +14983,19 @@ inline void SharedMemory::initSysV() noexcept {
                     if ((void *)-1 != m_sharedMemory) {
                         m_userAccessibleSharedMemory = m_sharedMemory;
                     } else { // LCOV_EXCL_LINE
-                        std::cerr << "[cluon::SharedMemory (SysV)] Failed to attach to shared memory (0x" << std::hex << m_shmKeySysV << std::dec // LCOV_EXCL_LINE
-                                  << "): " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format off // LCOV_EXCL_LINE
+                        std::cerr << "[cluon::SharedMemory (SysV)] Failed to attach to shared memory (0x" << std::hex << m_shmKeySysV << std::dec << "): " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format on // LCOV_EXCL_LINE
                     }
 #pragma GCC diagnostic pop
                 } else { // LCOV_EXCL_LINE
-                    std::cerr << "[cluon::SharedMemory (SysV)] Failed to get to shared memory (0x" << std::hex << m_shmKeySysV << std::dec // LCOV_EXCL_LINE
-                              << "): " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format off // LCOV_EXCL_LINE
+                    std::cerr << "[cluon::SharedMemory (SysV)] Failed to get to shared memory (0x" << std::hex << m_shmKeySysV << std::dec << "): " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format on // LCOV_EXCL_LINE
                 }
             } else {
                 // The caller wants to attach to an existing shared memory segment.
-                m_sharedMemoryIDSysV = ::shmget(m_shmKeySysV, 0, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH);
+                m_sharedMemoryIDSysV = ::shmget(m_shmKeySysV, 0, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
                 if (-1 != m_sharedMemoryIDSysV) {
                     struct shmid_ds info;
                     if (-1 != ::shmctl(m_sharedMemoryIDSysV, IPC_STAT, &info)) {
@@ -14561,17 +15006,20 @@ inline void SharedMemory::initSysV() noexcept {
                         if ((void *)-1 != m_sharedMemory) {
                             m_userAccessibleSharedMemory = m_sharedMemory;
                         } else { // LCOV_EXCL_LINE
-                            std::cerr << "[cluon::SharedMemory (SysV)] Failed to attach to shared memory (0x" << std::hex << m_shmKeySysV << std::dec // LCOV_EXCL_LINE
-                                      << "): " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format off // LCOV_EXCL_LINE
+                            std::cerr << "[cluon::SharedMemory (SysV)] Failed to attach to shared memory (0x" << std::hex << m_shmKeySysV << std::dec << "): " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format on // LCOV_EXCL_LINE
                         }
 #pragma GCC diagnostic pop
                     } else { // LCOV_EXCL_LINE
-                        std::cerr << "[cluon::SharedMemory (SysV)] Could not read information about shared memory (0x" << std::hex << m_shmKeySysV << std::dec // LCOV_EXCL_LINE
-                                  << "): " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format off // LCOV_EXCL_LINE
+                        std::cerr << "[cluon::SharedMemory (SysV)] Could not read information about shared memory (0x" << std::hex << m_shmKeySysV << std::dec << "): " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format on // LCOV_EXCL_LINE
                     }
                 } else { // LCOV_EXCL_LINE
-                    std::cerr << "[cluon::SharedMemory (SysV)] Failed to get shared memory (0x" << std::hex << m_shmKeySysV << std::dec // LCOV_EXCL_LINE
-                              << "): " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format off // LCOV_EXCL_LINE
+                    std::cerr << "[cluon::SharedMemory (SysV)] Failed to get shared memory (0x" << std::hex << m_shmKeySysV << std::dec << "): " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format on // LCOV_EXCL_LINE
                 }
             }
         }
@@ -14579,7 +15027,9 @@ inline void SharedMemory::initSysV() noexcept {
         // Next, create the mutex (but only if the shared memory was acquired correctly.
         m_mutexKeySysV = ::ftok(m_name.c_str(), ID_SEM_AS_MUTEX);
         if (-1 == m_mutexKeySysV) {
+// clang-format off // LCOV_EXCL_LINE
             std::cerr << "[cluon::SharedMemory (SysV)] Key for mutex could not be created: " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format on // LCOV_EXCL_LINE
         }
         if ((-1 != m_shmKeySysV) && (-1 != m_mutexKeySysV) && (nullptr != m_userAccessibleSharedMemory)) {
             if (!m_hasOnlyAttachedToSharedMemory) {
@@ -14588,10 +15038,12 @@ inline void SharedMemory::initSysV() noexcept {
 
                 // First, try to remove the orphaned one.
                 {
-                    int orphanedMutexIDSysV = ::semget(m_mutexKeySysV, 0, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH);
+                    int orphanedMutexIDSysV = ::semget(m_mutexKeySysV, 0, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
                     if (!(orphanedMutexIDSysV < 0)) {
                         if (::semctl(orphanedMutexIDSysV, 0, IPC_RMID)) {
+// clang-format off // LCOV_EXCL_LINE
                             std::cerr << "[cluon::SharedMemory (SysV)] Existing semaphore (0x" << std::hex << m_mutexKeySysV << std::dec << ", intended to use as mutex) found; removing failed." << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format on // LCOV_EXCL_LINE
                         }
                     }
                 }
@@ -14599,7 +15051,7 @@ inline void SharedMemory::initSysV() noexcept {
                 // Next, create the correct semaphore used as mutex.
                 {
                     constexpr int NSEMS{1};
-                    m_mutexIDSysV = ::semget(m_mutexKeySysV, NSEMS, IPC_CREAT | IPC_EXCL | S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH);
+                    m_mutexIDSysV = ::semget(m_mutexKeySysV, NSEMS, IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
                     if (-1 != m_mutexIDSysV) {
                         constexpr int NUMBER_OF_SEMAPHORE_TO_CONTROL{0};
                         constexpr int INITIAL_VALUE{1};
@@ -14610,20 +15062,23 @@ inline void SharedMemory::initSysV() noexcept {
 #pragma GCC diagnostic ignored "-Wclass-varargs"
 #endif
                         if (-1 == ::semctl(m_mutexIDSysV, NUMBER_OF_SEMAPHORE_TO_CONTROL, SETVAL, tmp)) {
-                            std::cerr << "[cluon::SharedMemory (SysV)] Failed to initialize semaphore (0x" << std::hex << m_mutexKeySysV << std::dec // LCOV_EXCL_LINE
-                                      << ", intended to use as mutex): " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format off // LCOV_EXCL_LINE
+                            std::cerr << "[cluon::SharedMemory (SysV)] Failed to initialize semaphore (0x" << std::hex << m_mutexKeySysV << std::dec << ", intended to use as mutex): " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format on // LCOV_EXCL_LINE
                         }
 #pragma GCC diagnostic pop
                     } else { // LCOV_EXCL_LINE
-                        std::cerr << "[cluon::SharedMemory (SysV)] Failed to create semaphore (0x" << std::hex << m_mutexKeySysV << std::dec // LCOV_EXCL_LINE
-                                  << ", intended to use as mutex): " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format off // LCOV_EXCL_LINE
+                        std::cerr << "[cluon::SharedMemory (SysV)] Failed to create semaphore (0x" << std::hex << m_mutexKeySysV << std::dec << ", intended to use as mutex): " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format on // LCOV_EXCL_LINE
                     }
                 }
             } else {
-                m_mutexIDSysV = ::semget(m_mutexKeySysV, 0, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH);
+                m_mutexIDSysV = ::semget(m_mutexKeySysV, 0, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
                 if (-1 == m_mutexIDSysV) {
-                    std::cerr << "[cluon::SharedMemory (SysV)] Failed to get semaphore (0x" << std::hex << m_mutexKeySysV << std::dec // LCOV_EXCL_LINE
-                              << ", intended to use as mutex): " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format off // LCOV_EXCL_LINE
+                    std::cerr << "[cluon::SharedMemory (SysV)] Failed to get semaphore (0x" << std::hex << m_mutexKeySysV << std::dec << ", intended to use as mutex): " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format on // LCOV_EXCL_LINE
                 }
             }
         }
@@ -14631,7 +15086,9 @@ inline void SharedMemory::initSysV() noexcept {
         // Next, create the condition variable (but only if the shared memory was acquired correctly.
         m_conditionKeySysV = ::ftok(m_name.c_str(), ID_SEM_AS_CONDITION);
         if (-1 == m_conditionKeySysV) {
+// clang-format off // LCOV_EXCL_LINE
             std::cerr << "[cluon::SharedMemory (SysV)] Key for condition could not be created: " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format on // LCOV_EXCL_LINE
         }
         if ((-1 != m_shmKeySysV) && (-1 != m_mutexKeySysV) && (-1 != m_conditionKeySysV) && (nullptr != m_userAccessibleSharedMemory)) {
             if (!m_hasOnlyAttachedToSharedMemory) {
@@ -14640,10 +15097,12 @@ inline void SharedMemory::initSysV() noexcept {
 
                 // First, try to remove the orphaned one.
                 {
-                    int orphanedConditionIDSysV = ::semget(m_conditionKeySysV, 0, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH);
+                    int orphanedConditionIDSysV = ::semget(m_conditionKeySysV, 0, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
                     if (!(orphanedConditionIDSysV < 0)) {
                         if (::semctl(orphanedConditionIDSysV, 0, IPC_RMID)) {
+// clang-format off // LCOV_EXCL_LINE
                             std::cerr << "[cluon::SharedMemory (SysV)] Existing semaphore (0x" << std::hex << m_conditionKeySysV << std::dec << ", intended to use as condition variable) found; removing failed." << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format on // LCOV_EXCL_LINE
                         }
                     }
                 }
@@ -14651,7 +15110,7 @@ inline void SharedMemory::initSysV() noexcept {
                 // Next, create the correct semaphore used as condition variable.
                 {
                     constexpr int NSEMS{1};
-                    m_conditionIDSysV = ::semget(m_conditionKeySysV, NSEMS, IPC_CREAT | IPC_EXCL | S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH);
+                    m_conditionIDSysV = ::semget(m_conditionKeySysV, NSEMS, IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
                     if (-1 != m_conditionIDSysV) {
                         constexpr int NUMBER_OF_SEMAPHORE_TO_CONTROL{0};
                         constexpr int INITIAL_VALUE{1};
@@ -14662,31 +15121,44 @@ inline void SharedMemory::initSysV() noexcept {
 #pragma GCC diagnostic ignored "-Wclass-varargs"
 #endif
                         if (-1 == ::semctl(m_conditionIDSysV, NUMBER_OF_SEMAPHORE_TO_CONTROL, SETVAL, tmp)) {
-                            std::cerr << "[cluon::SharedMemory (SysV)] Failed to initialize semaphore (0x" << std::hex << m_conditionKeySysV << std::dec // LCOV_EXCL_LINE
-                                      << ", intended to use as condition variable): " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format off // LCOV_EXCL_LINE
+                            std::cerr << "[cluon::SharedMemory (SysV)] Failed to initialize semaphore (0x" << std::hex << m_conditionKeySysV << std::dec << ", intended to use as condition variable): " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format on // LCOV_EXCL_LINE
                         }
 #pragma GCC diagnostic pop
                     } else { // LCOV_EXCL_LINE
-                        std::cerr << "[cluon::SharedMemory (SysV)] Failed to create semaphore (0x" << std::hex << m_conditionKeySysV << std::dec // LCOV_EXCL_LINE
-                                  << ", intended to use as condition variable): " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format off // LCOV_EXCL_LINE
+                        std::cerr << "[cluon::SharedMemory (SysV)] Failed to create semaphore (0x" << std::hex << m_conditionKeySysV << std::dec << ", intended to use as condition variable): " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format on // LCOV_EXCL_LINE
                     }
                 }
             } else {
-                m_conditionIDSysV = ::semget(m_conditionKeySysV, 0, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH);
+                m_conditionIDSysV = ::semget(m_conditionKeySysV, 0, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
                 if (-1 == m_conditionIDSysV) {
-                    std::cerr << "[cluon::SharedMemory (SysV)] Failed to get semaphore (0x" << std::hex << m_conditionKeySysV << std::dec // LCOV_EXCL_LINE
-                              << ", intended to use as condition variable): " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format off // LCOV_EXCL_LINE
+                    std::cerr << "[cluon::SharedMemory (SysV)] Failed to get semaphore (0x" << std::hex << m_conditionKeySysV << std::dec << ", intended to use as condition variable): " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format on // LCOV_EXCL_LINE
                 }
             }
         }
+    }
+
+    // If the shared memory is present, open the token file for the time stamping.
+    if (nullptr != m_sharedMemory) {
+        m_fdForTimeStamping = ::open(m_name.c_str(), O_RDONLY);
     }
 }
 
 inline void SharedMemory::deinitSysV() noexcept {
     if (nullptr != m_sharedMemory) {
+        // Close token file.
+        ::close(m_fdForTimeStamping);
+        m_fdForTimeStamping = -1;
+
         if (-1 == ::shmdt(m_sharedMemory)) {
-            std::cerr << "[cluon::SharedMemory (SysV)] Could not detach shared memory (0x" << std::hex << m_shmKeySysV << std::dec << "): " << ::strerror(errno) // LCOV_EXCL_LINE
-                      << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format off // LCOV_EXCL_LINE
+            std::cerr << "[cluon::SharedMemory (SysV)] Could not detach shared memory (0x" << std::hex << m_shmKeySysV << std::dec << "): " << ::strerror(errno) << " (" << errno << ")" << std::endl; // LCOV_EXCL_LINE
+// clang-format on // LCOV_EXCL_LINE
         }
     }
 
@@ -15145,6 +15617,12 @@ public:
     }
 
     // Object data
+    bool is_empty_object() const {
+        return is_object() && obj_->empty();
+    }
+    bool is_non_empty_object() const {
+        return is_object() && !obj_->empty();
+    }
     void set(const string_type& name, const basic_data& var) {
         if (is_object()) {
             auto it = obj_->find(name);
@@ -15311,6 +15789,355 @@ private:
     std::vector<const basic_data<string_type>*> items_;
 };
 
+template <typename string_type>
+class context_internal {
+public:
+    basic_context<string_type>& ctx;
+    delimiter_set<string_type> delim_set;
+    
+    context_internal(basic_context<string_type>& a_ctx)
+        : ctx(a_ctx)
+    {
+    }
+};
+
+enum class tag_type {
+    text,
+    variable,
+    unescaped_variable,
+    section_begin,
+    section_end,
+    section_begin_inverted,
+    comment,
+    partial,
+    set_delimiter,
+};
+
+template <typename string_type>
+class mstch_tag /* gcc doesn't allow "tag tag;" so rename the class :( */ {
+public:
+    string_type name;
+    tag_type type = tag_type::text;
+    std::shared_ptr<string_type> section_text;
+    std::shared_ptr<delimiter_set<string_type>> delim_set;
+    bool is_section_begin() const {
+        return type == tag_type::section_begin || type == tag_type::section_begin_inverted;
+    }
+    bool is_section_end() const {
+        return type == tag_type::section_end;
+    }
+};
+
+template <typename string_type>
+class context_pusher {
+public:
+    context_pusher(context_internal<string_type>& ctx, const basic_data<string_type>* data)
+        : ctx_(ctx)
+    {
+        ctx.ctx.push(data);
+    }
+    ~context_pusher() {
+        ctx_.ctx.pop();
+    }
+    context_pusher(const context_pusher&) = delete;
+    context_pusher& operator= (const context_pusher&) = delete;
+private:
+    context_internal<string_type>& ctx_;
+};
+
+template <typename string_type>
+class component {
+private:
+    using string_size_type = typename string_type::size_type;
+
+public:
+    string_type text;
+    mstch_tag<string_type> tag;
+    std::vector<component> children;
+    string_size_type position = string_type::npos;
+
+    enum class walk_control {
+        walk, // "continue" is reserved :/
+        stop,
+        skip,
+    };
+    using walk_callback = std::function<walk_control(component&)>;
+    
+    component() {}
+    component(const string_type& t, string_size_type p) : text(t), position(p) {}
+    
+    bool is_text() const {
+        return tag.type == tag_type::text;
+    }
+    
+    bool is_newline() const {
+        return is_text() && ((text.size() == 2 && text[0] == '\r' && text[1] == '\n') ||
+        (text.size() == 1 && (text[0] == '\n' || text[0] == '\r')));
+    }
+    
+    bool is_non_newline_whitespace() const {
+        return is_text() && !is_newline() && text.size() == 1 && (text[0] == ' ' || text[0] == '\t');
+    }
+
+    void walk_children(const walk_callback& callback) {
+        for (auto& child : children) {
+            if (child.walk(callback) != walk_control::walk) {
+                break;
+            }
+        }
+    }
+    
+private:
+    walk_control walk(const walk_callback& callback) {
+        walk_control control{callback(*this)};
+        if (control == walk_control::stop) {
+            return control;
+        } else if (control == walk_control::skip) {
+            return walk_control::walk;
+        }
+        for (auto& child : children) {
+            control = child.walk(callback);
+            assert(control == walk_control::walk);
+        }
+        return control;
+    }
+};
+
+template <typename string_type>
+class parser {
+public:
+    parser(const string_type& input, context_internal<string_type>& ctx, component<string_type>& root_component, string_type& error_message)
+    {
+        parse(input, ctx, root_component, error_message);
+    }
+
+private:
+    void parse(const string_type& input, context_internal<string_type>& ctx, component<string_type>& root_component, string_type& error_message) const {
+        using string_size_type = typename string_type::size_type;
+        using streamstring = std::basic_ostringstream<typename string_type::value_type>;
+        
+        const string_type brace_delimiter_end_unescaped(3, '}');
+        const string_size_type input_size{input.size()};
+
+        bool current_delimiter_is_brace{ctx.delim_set.is_default()};
+        
+        std::vector<component<string_type>*> sections{&root_component};
+        std::vector<string_size_type> section_starts;
+        string_type current_text;
+        string_size_type current_text_position = -1;
+        
+        current_text.reserve(input_size);
+        
+        const auto process_current_text = [&current_text, &current_text_position, &sections]() {
+            if (!current_text.empty()) {
+                const component<string_type> comp{current_text, current_text_position};
+                sections.back()->children.push_back(comp);
+                current_text.clear();
+                current_text_position = -1;
+            }
+        };
+        
+        const std::vector<string_type> whitespace{
+            string_type(1, '\r') + string_type(1, '\n'),
+            string_type(1, '\n'),
+            string_type(1, '\r'),
+            string_type(1, ' '),
+            string_type(1, '\t'),
+        };
+        
+        for (string_size_type input_position = 0; input_position != input_size;) {
+            bool parse_tag = false;
+            
+            if (input.compare(input_position, ctx.delim_set.begin.size(), ctx.delim_set.begin) == 0) {
+                process_current_text();
+
+                // Tag start delimiter
+                parse_tag = true;
+            } else {
+                bool parsed_whitespace = false;
+                for (const auto& whitespace_text : whitespace) {
+                    if (input.compare(input_position, whitespace_text.size(), whitespace_text) == 0) {
+                        process_current_text();
+
+                        const component<string_type> comp{whitespace_text, input_position};
+                        sections.back()->children.push_back(comp);
+                        input_position += whitespace_text.size();
+                        
+                        parsed_whitespace = true;
+                        break;
+                    }
+                }
+                
+                if (!parsed_whitespace) {
+                    if (current_text.empty()) {
+                        current_text_position = input_position;
+                    }
+                    current_text.append(1, input[input_position]);
+                    input_position++;
+                }
+            }
+            
+            if (!parse_tag) {
+                continue;
+            }
+            
+            // Find the next tag start delimiter
+            const string_size_type tag_location_start = input_position;
+            
+            // Find the next tag end delimiter
+            string_size_type tag_contents_location{tag_location_start + ctx.delim_set.begin.size()};
+            const bool tag_is_unescaped_var{current_delimiter_is_brace && tag_location_start != (input_size - 2) && input.at(tag_contents_location) == ctx.delim_set.begin.at(0)};
+            const string_type& current_tag_delimiter_end{tag_is_unescaped_var ? brace_delimiter_end_unescaped : ctx.delim_set.end};
+            const auto current_tag_delimiter_end_size = current_tag_delimiter_end.size();
+            if (tag_is_unescaped_var) {
+                ++tag_contents_location;
+            }
+            const string_size_type tag_location_end{input.find(current_tag_delimiter_end, tag_contents_location)};
+            if (tag_location_end == string_type::npos) {
+                streamstring ss;
+                ss << "Unclosed tag at " << tag_location_start;
+                error_message.assign(ss.str());
+                return;
+            }
+            
+            // Parse tag
+            const string_type tag_contents{trim(string_type{input, tag_contents_location, tag_location_end - tag_contents_location})};
+            component<string_type> comp;
+            if (!tag_contents.empty() && tag_contents[0] == '=') {
+                if (!parse_set_delimiter_tag(tag_contents, ctx.delim_set)) {
+                    streamstring ss;
+                    ss << "Invalid set delimiter tag at " << tag_location_start;
+                    error_message.assign(ss.str());
+                    return;
+                }
+                current_delimiter_is_brace = ctx.delim_set.is_default();
+                comp.tag.type = tag_type::set_delimiter;
+                comp.tag.delim_set.reset(new delimiter_set<string_type>(ctx.delim_set));
+            }
+            if (comp.tag.type != tag_type::set_delimiter) {
+                parse_tag_contents(tag_is_unescaped_var, tag_contents, comp.tag);
+            }
+            comp.position = tag_location_start;
+            sections.back()->children.push_back(comp);
+            
+            // Start next search after this tag
+            input_position = tag_location_end + current_tag_delimiter_end_size;
+            
+            // Push or pop sections
+            if (comp.tag.is_section_begin()) {
+                sections.push_back(&sections.back()->children.back());
+                section_starts.push_back(input_position);
+            } else if (comp.tag.is_section_end()) {
+                if (sections.size() == 1) {
+                    streamstring ss;
+                    ss << "Unopened section \"" << comp.tag.name << "\" at " << comp.position;
+                    error_message.assign(ss.str());
+                    return;
+                }
+                sections.back()->tag.section_text.reset(new string_type(input.substr(section_starts.back(), tag_location_start - section_starts.back())));
+                sections.pop_back();
+                section_starts.pop_back();
+            }
+        }
+        
+        process_current_text();
+        
+        // Check for sections without an ending tag
+        root_component.walk_children([&error_message](component<string_type>& comp) -> typename component<string_type>::walk_control {
+            if (!comp.tag.is_section_begin()) {
+                return component<string_type>::walk_control::walk;
+            }
+            if (comp.children.empty() || !comp.children.back().tag.is_section_end() || comp.children.back().tag.name != comp.tag.name) {
+                streamstring ss;
+                ss << "Unclosed section \"" << comp.tag.name << "\" at " << comp.position;
+                error_message.assign(ss.str());
+                return component<string_type>::walk_control::stop;
+            }
+            comp.children.pop_back(); // remove now useless end section component
+            return component<string_type>::walk_control::walk;
+        });
+        if (!error_message.empty()) {
+            return;
+        }
+    }
+    
+    bool is_set_delimiter_valid(const string_type& delimiter) const {
+        // "Custom delimiters may not contain whitespace or the equals sign."
+        for (const auto ch : delimiter) {
+            if (ch == '=' || isspace(ch)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    
+    bool parse_set_delimiter_tag(const string_type& contents, delimiter_set<string_type>& delimiter_set) const {
+        // Smallest legal tag is "=X X="
+        if (contents.size() < 5) {
+            return false;
+        }
+        if (contents.back() != '=') {
+            return false;
+        }
+        const auto contents_substr = trim(contents.substr(1, contents.size() - 2));
+        const auto spacepos = contents_substr.find(' ');
+        if (spacepos == string_type::npos) {
+            return false;
+        }
+        const auto nonspace = contents_substr.find_first_not_of(' ', spacepos + 1);
+        assert(nonspace != string_type::npos);
+        const string_type begin = contents_substr.substr(0, spacepos);
+        const string_type end = contents_substr.substr(nonspace, contents_substr.size() - nonspace);
+        if (!is_set_delimiter_valid(begin) || !is_set_delimiter_valid(end)) {
+            return false;
+        }
+        delimiter_set.begin = begin;
+        delimiter_set.end = end;
+        return true;
+    }
+    
+    void parse_tag_contents(bool is_unescaped_var, const string_type& contents, mstch_tag<string_type>& tag) const {
+        if (is_unescaped_var) {
+            tag.type = tag_type::unescaped_variable;
+            tag.name = contents;
+        } else if (contents.empty()) {
+            tag.type = tag_type::variable;
+            tag.name.clear();
+        } else {
+            switch (contents.at(0)) {
+                case '#':
+                    tag.type = tag_type::section_begin;
+                    break;
+                case '^':
+                    tag.type = tag_type::section_begin_inverted;
+                    break;
+                case '/':
+                    tag.type = tag_type::section_end;
+                    break;
+                case '>':
+                    tag.type = tag_type::partial;
+                    break;
+                case '&':
+                    tag.type = tag_type::unescaped_variable;
+                    break;
+                case '!':
+                    tag.type = tag_type::comment;
+                    break;
+                default:
+                    tag.type = tag_type::variable;
+                    break;
+            }
+            if (tag.type == tag_type::variable) {
+                tag.name = contents;
+            } else {
+                string_type name{contents};
+                name.erase(name.begin());
+                tag.name = trim(name);
+            }
+        }
+    }
+};
+
 template <typename StringType>
 class basic_mustache {
 public:
@@ -15319,16 +16146,16 @@ public:
     basic_mustache(const string_type& input)
         : basic_mustache() {
         context<string_type> ctx;
-        context_internal context{ctx};
-        parse(input, context);
+        context_internal<string_type> context{ctx};
+        parser<string_type> parser{input, context, root_component_, error_message_};
     }
 
     bool is_valid() const {
-        return errorMessage_.empty();
+        return error_message_.empty();
     }
     
     const string_type& error_message() const {
-        return errorMessage_;
+        return error_message_;
     }
 
     using escape_handler = std::function<string_type(const string_type&)>;
@@ -15349,313 +16176,48 @@ public:
         return render(data, ss).str();
     }
 
-    string_type render(basic_context<string_type>& ctx) {
-        std::basic_ostringstream<typename string_type::value_type> ss;
-        context_internal context{ctx};
-        render([&ss](const string_type& str) {
-            ss << str;
+    template <typename stream_type>
+    stream_type& render(basic_context<string_type>& ctx, stream_type& stream) {
+        context_internal<string_type> context{ctx};
+        render([&stream](const string_type& str) {
+            stream << str;
         }, context);
-        return ss.str();
+        return stream;
     }
 
-    using RenderHandler = std::function<void(const string_type&)>;
-    void render(const basic_data<string_type>& data, const RenderHandler& handler) {
+    string_type render(basic_context<string_type>& ctx) {
+        std::basic_ostringstream<typename string_type::value_type> ss;
+        return render(ctx, ss).str();
+    }
+
+    using render_handler = std::function<void(const string_type&)>;
+    void render(const basic_data<string_type>& data, const render_handler& handler) {
         if (!is_valid()) {
             return;
         }
         context<string_type> ctx{&data};
-        context_internal context{ctx};
+        context_internal<string_type> context{ctx};
         render(handler, context);
     }
 
 private:
-    using StringSizeType = typename string_type::size_type;
-    
-    class Tag {
-    public:
-        enum class Type {
-            Invalid,
-            Variable,
-            UnescapedVariable,
-            SectionBegin,
-            SectionEnd,
-            SectionBeginInverted,
-            Comment,
-            Partial,
-            SetDelimiter,
-        };
-        string_type name;
-        Type type = Type::Invalid;
-        std::shared_ptr<string_type> sectionText;
-        std::shared_ptr<delimiter_set<string_type>> delimiterSet;
-        bool isSectionBegin() const {
-            return type == Type::SectionBegin || type == Type::SectionBeginInverted;
-        }
-        bool isSectionEnd() const {
-            return type == Type::SectionEnd;
-        }
-    };
-    
-    class component {
-    public:
-        string_type text;
-        Tag tag;
-        std::vector<component> children;
-        StringSizeType position = string_type::npos;
-        bool isText() const {
-            return tag.type == Tag::Type::Invalid;
-        }
-        component() {}
-        component(const string_type& t, StringSizeType p) : text(t), position(p) {}
-    };
-
-    class context_internal {
-    public:
-        basic_context<string_type>& ctx;
-        delimiter_set<string_type> delimiterSet;
-
-        context_internal(basic_context<string_type>& a_ctx)
-            : ctx(a_ctx)
-        {
-        }
-    };
-
-    class context_pusher {
-    public:
-        context_pusher(context_internal& ctx, const basic_data<string_type>* data) : ctx_(ctx) {
-            ctx.ctx.push(data);
-        }
-        ~context_pusher() {
-            ctx_.ctx.pop();
-        }
-        context_pusher(const context_pusher&) = delete;
-        context_pusher& operator= (const context_pusher&) = delete;
-    private:
-        context_internal& ctx_;
-    };
+    using string_size_type = typename string_type::size_type;
 
     basic_mustache()
         : escape_(html_escape<string_type>)
     {
     }
     
-    basic_mustache(const string_type& input, context_internal& ctx)
+    basic_mustache(const string_type& input, context_internal<string_type>& ctx)
         : basic_mustache() {
-        parse(input, ctx);
+        parser<string_type> parser{input, ctx, root_component_, error_message_};
+    }
+    
+    void walk(const typename component<string_type>::walk_callback& callback) {
+        root_component_.walk_children(callback);
     }
 
-    void parse(const string_type& input, context_internal& ctx) {
-        using streamstring = std::basic_ostringstream<typename string_type::value_type>;
-        
-        const string_type braceDelimiterEndUnescaped(3, '}');
-        const StringSizeType inputSize{input.size()};
-        
-        bool currentDelimiterIsBrace{ctx.delimiterSet.is_default()};
-        
-        std::vector<component*> sections{&rootComponent_};
-        std::vector<StringSizeType> sectionStarts;
-        
-        StringSizeType inputPosition{0};
-        while (inputPosition != inputSize) {
-            
-            // Find the next tag start delimiter
-            const StringSizeType tagLocationStart{input.find(ctx.delimiterSet.begin, inputPosition)};
-            if (tagLocationStart == string_type::npos) {
-                // No tag found. Add the remaining text.
-                const component comp{{input, inputPosition, inputSize - inputPosition}, inputPosition};
-                sections.back()->children.push_back(comp);
-                break;
-            } else if (tagLocationStart != inputPosition) {
-                // Tag found, add text up to this tag.
-                const component comp{{input, inputPosition, tagLocationStart - inputPosition}, inputPosition};
-                sections.back()->children.push_back(comp);
-            }
-            
-            // Find the next tag end delimiter
-            StringSizeType tagContentsLocation{tagLocationStart + ctx.delimiterSet.begin.size()};
-            const bool tagIsUnescapedVar{currentDelimiterIsBrace && tagLocationStart != (inputSize - 2) && input.at(tagContentsLocation) == ctx.delimiterSet.begin.at(0)};
-            const string_type& currentTagDelimiterEnd{tagIsUnescapedVar ? braceDelimiterEndUnescaped : ctx.delimiterSet.end};
-            const auto currentTagDelimiterEndSize = currentTagDelimiterEnd.size();
-            if (tagIsUnescapedVar) {
-                ++tagContentsLocation;
-            }
-            StringSizeType tagLocationEnd{input.find(currentTagDelimiterEnd, tagContentsLocation)};
-            if (tagLocationEnd == string_type::npos) {
-                streamstring ss;
-                ss << "Unclosed tag at " << tagLocationStart;
-                errorMessage_.assign(ss.str());
-                return;
-            }
-            
-            // Parse tag
-            const string_type tagContents{trim(string_type{input, tagContentsLocation, tagLocationEnd - tagContentsLocation})};
-            component comp;
-            if (!tagContents.empty() && tagContents[0] == '=') {
-                if (!parseSetDelimiterTag(tagContents, ctx.delimiterSet)) {
-                    streamstring ss;
-                    ss << "Invalid set delimiter tag at " << tagLocationStart;
-                    errorMessage_.assign(ss.str());
-                    return;
-                }
-                currentDelimiterIsBrace = ctx.delimiterSet.is_default();
-                comp.tag.type = Tag::Type::SetDelimiter;
-                comp.tag.delimiterSet.reset(new delimiter_set<string_type>(ctx.delimiterSet));
-            }
-            if (comp.tag.type != Tag::Type::SetDelimiter) {
-                parseTagContents(tagIsUnescapedVar, tagContents, comp.tag);
-            }
-            comp.position = tagLocationStart;
-            sections.back()->children.push_back(comp);
-            
-            // Start next search after this tag
-            inputPosition = tagLocationEnd + currentTagDelimiterEndSize;
-
-            // Push or pop sections
-            if (comp.tag.isSectionBegin()) {
-                sections.push_back(&sections.back()->children.back());
-                sectionStarts.push_back(inputPosition);
-            } else if (comp.tag.isSectionEnd()) {
-                if (sections.size() == 1) {
-                    streamstring ss;
-                    ss << "Unopened section \"" << comp.tag.name << "\" at " << comp.position;
-                    errorMessage_.assign(ss.str());
-                    return;
-                }
-                sections.back()->tag.sectionText.reset(new string_type(input.substr(sectionStarts.back(), tagLocationStart - sectionStarts.back())));
-                sections.pop_back();
-                sectionStarts.pop_back();
-            }
-        }
-        
-        // Check for sections without an ending tag
-        walk([this](component& comp) -> WalkControl {
-            if (!comp.tag.isSectionBegin()) {
-                return WalkControl::Continue;
-            }
-            if (comp.children.empty() || !comp.children.back().tag.isSectionEnd() || comp.children.back().tag.name != comp.tag.name) {
-                streamstring ss;
-                ss << "Unclosed section \"" << comp.tag.name << "\" at " << comp.position;
-                errorMessage_.assign(ss.str());
-                return WalkControl::Stop;
-            }
-            comp.children.pop_back(); // remove now useless end section component
-            return WalkControl::Continue;
-        });
-        if (!errorMessage_.empty()) {
-            return;
-        }
-    }
-    
-    enum class WalkControl {
-        Continue,
-        Stop,
-        Skip,
-    };
-    using WalkCallback = std::function<WalkControl(component&)>;
-    
-    void walk(const WalkCallback& callback) {
-        walkChildren(callback, rootComponent_);
-    }
-
-    void walkChildren(const WalkCallback& callback, component& comp) {
-        for (auto& childComp : comp.children) {
-            if (walkComponent(callback, childComp) != WalkControl::Continue) {
-                break;
-            }
-        }
-    }
-    
-    WalkControl walkComponent(const WalkCallback& callback, component& comp) {
-        WalkControl control{callback(comp)};
-        if (control == WalkControl::Stop) {
-            return control;
-        } else if (control == WalkControl::Skip) {
-            return WalkControl::Continue;
-        }
-        for (auto& childComp : comp.children) {
-            control = walkComponent(callback, childComp);
-            assert(control == WalkControl::Continue);
-        }
-        return control;
-    }
-    
-    bool isSetDelimiterValid(const string_type& delimiter) {
-        // "Custom delimiters may not contain whitespace or the equals sign."
-        for (const auto ch : delimiter) {
-            if (ch == '=' || isspace(ch)) {
-                return false;
-            }
-        }
-        return true;
-    }
-    
-    bool parseSetDelimiterTag(const string_type& contents, delimiter_set<string_type>& delimiterSet) {
-        // Smallest legal tag is "=X X="
-        if (contents.size() < 5) {
-            return false;
-        }
-        if (contents.back() != '=') {
-            return false;
-        }
-        const auto contentsSubstr = trim(contents.substr(1, contents.size() - 2));
-        const auto spacepos = contentsSubstr.find(' ');
-        if (spacepos == string_type::npos) {
-            return false;
-        }
-        const auto nonspace = contentsSubstr.find_first_not_of(' ', spacepos + 1);
-        assert(nonspace != string_type::npos);
-        const string_type begin = contentsSubstr.substr(0, spacepos);
-        const string_type end = contentsSubstr.substr(nonspace, contentsSubstr.size() - nonspace);
-        if (!isSetDelimiterValid(begin) || !isSetDelimiterValid(end)) {
-            return false;
-        }
-        delimiterSet.begin = begin;
-        delimiterSet.end = end;
-        return true;
-    }
-    
-    void parseTagContents(bool isUnescapedVar, const string_type& contents, Tag& tag) {
-        if (isUnescapedVar) {
-            tag.type = Tag::Type::UnescapedVariable;
-            tag.name = contents;
-        } else if (contents.empty()) {
-            tag.type = Tag::Type::Variable;
-            tag.name.clear();
-        } else {
-            switch (contents.at(0)) {
-                case '#':
-                    tag.type = Tag::Type::SectionBegin;
-                    break;
-                case '^':
-                    tag.type = Tag::Type::SectionBeginInverted;
-                    break;
-                case '/':
-                    tag.type = Tag::Type::SectionEnd;
-                    break;
-                case '>':
-                    tag.type = Tag::Type::Partial;
-                    break;
-                case '&':
-                    tag.type = Tag::Type::UnescapedVariable;
-                    break;
-                case '!':
-                    tag.type = Tag::Type::Comment;
-                    break;
-                default:
-                    tag.type = Tag::Type::Variable;
-                    break;
-            }
-            if (tag.type == Tag::Type::Variable) {
-                tag.name = contents;
-            } else {
-                string_type name{contents};
-                name.erase(name.begin());
-                tag.name = trim(name);
-            }
-        }
-    }
-
-    string_type render(context_internal& ctx) {
+    string_type render(context_internal<string_type>& ctx) {
         std::basic_ostringstream<typename string_type::value_type> ss;
         render([&ss](const string_type& str) {
             ss << str;
@@ -15663,113 +16225,113 @@ private:
         return ss.str();
     }
 
-    void render(const RenderHandler& handler, context_internal& ctx) {
-        walk([&handler, &ctx, this](component& comp) -> WalkControl {
-            return renderComponent(handler, ctx, comp);
+    void render(const render_handler& handler, context_internal<string_type>& ctx) {
+        walk([&handler, &ctx, this](component<string_type>& comp) -> typename component<string_type>::walk_control {
+            return render_component(handler, ctx, comp);
         });
     }
 
-    WalkControl renderComponent(const RenderHandler& handler, context_internal& ctx, component& comp) {
-        if (comp.isText()) {
+    typename component<string_type>::walk_control render_component(const render_handler& handler, context_internal<string_type>& ctx, component<string_type>& comp) {
+        if (comp.is_text()) {
             handler(comp.text);
-            return WalkControl::Continue;
+            return component<string_type>::walk_control::walk;
         }
         
-        const Tag& tag{comp.tag};
+        const mstch_tag<string_type>& tag{comp.tag};
         const basic_data<string_type>* var = nullptr;
         switch (tag.type) {
-            case Tag::Type::Variable:
-            case Tag::Type::UnescapedVariable:
+            case tag_type::variable:
+            case tag_type::unescaped_variable:
                 if ((var = ctx.ctx.get(tag.name)) != nullptr) {
-                    if (!renderVariable(handler, var, ctx, tag.type == Tag::Type::Variable)) {
-                        return WalkControl::Stop;
+                    if (!render_variable(handler, var, ctx, tag.type == tag_type::variable)) {
+                        return component<string_type>::walk_control::stop;
                     }
                 }
                 break;
-            case Tag::Type::SectionBegin:
+            case tag_type::section_begin:
                 if ((var = ctx.ctx.get(tag.name)) != nullptr) {
                     if (var->is_lambda() || var->is_lambda2()) {
-                        if (!renderLambda(handler, var, ctx, RenderLambdaEscape::Optional, *comp.tag.sectionText, true)) {
-                            return WalkControl::Stop;
+                        if (!render_lambda(handler, var, ctx, render_lambda_escape::optional, *comp.tag.section_text, true)) {
+                            return component<string_type>::walk_control::stop;
                         }
                     } else if (!var->is_false() && !var->is_empty_list()) {
-                        renderSection(handler, ctx, comp, var);
+                        render_section(handler, ctx, comp, var);
                     }
                 }
-                return WalkControl::Skip;
-            case Tag::Type::SectionBeginInverted:
+                return component<string_type>::walk_control::skip;
+            case tag_type::section_begin_inverted:
                 if ((var = ctx.ctx.get(tag.name)) == nullptr || var->is_false() || var->is_empty_list()) {
-                    renderSection(handler, ctx, comp, var);
+                    render_section(handler, ctx, comp, var);
                 }
-                return WalkControl::Skip;
-            case Tag::Type::Partial:
+                return component<string_type>::walk_control::skip;
+            case tag_type::partial:
                 if ((var = ctx.ctx.get_partial(tag.name)) != nullptr && (var->is_partial() || var->is_string())) {
                     const auto partial_result = var->is_partial() ? var->partial_value()() : var->string_value();
                     basic_mustache tmpl{partial_result};
                     tmpl.set_custom_escape(escape_);
                     if (!tmpl.is_valid()) {
-                        errorMessage_ = tmpl.error_message();
+                        error_message_ = tmpl.error_message();
                     } else {
                         tmpl.render(handler, ctx);
                         if (!tmpl.is_valid()) {
-                            errorMessage_ = tmpl.error_message();
+                            error_message_ = tmpl.error_message();
                         }
                     }
                     if (!tmpl.is_valid()) {
-                        return WalkControl::Stop;
+                        return component<string_type>::walk_control::stop;
                     }
                 }
                 break;
-            case Tag::Type::SetDelimiter:
-                ctx.delimiterSet = *comp.tag.delimiterSet;
+            case tag_type::set_delimiter:
+                ctx.delim_set = *comp.tag.delim_set;
                 break;
             default:
                 break;
         }
         
-        return WalkControl::Continue;
+        return component<string_type>::walk_control::walk;
     }
 
-    enum class RenderLambdaEscape {
-        Escape,
-        Unescape,
-        Optional,
+    enum class render_lambda_escape {
+        escape,
+        unescape,
+        optional,
     };
     
-    bool renderLambda(const RenderHandler& handler, const basic_data<string_type>* var, context_internal& ctx, RenderLambdaEscape escape, const string_type& text, bool parseWithSameContext) {
-        const typename basic_renderer<string_type>::type2 render2 = [this, &handler, var, &ctx, parseWithSameContext, escape](const string_type& text, bool escaped) {
-            const auto processTemplate = [this, &handler, var, &ctx, escape, escaped](basic_mustache& tmpl) -> string_type {
+    bool render_lambda(const render_handler& handler, const basic_data<string_type>* var, context_internal<string_type>& ctx, render_lambda_escape escape, const string_type& text, bool parse_with_same_context) {
+        const typename basic_renderer<string_type>::type2 render2 = [this, &ctx, parse_with_same_context, escape](const string_type& text, bool escaped) {
+            const auto process_template = [this, &ctx, escape, escaped](basic_mustache& tmpl) -> string_type {
                 if (!tmpl.is_valid()) {
-                    errorMessage_ = tmpl.error_message();
+                    error_message_ = tmpl.error_message();
                     return {};
                 }
                 const string_type str{tmpl.render(ctx)};
                 if (!tmpl.is_valid()) {
-                    errorMessage_ = tmpl.error_message();
+                    error_message_ = tmpl.error_message();
                     return {};
                 }
-                bool doEscape = false;
+                bool do_escape = false;
                 switch (escape) {
-                    case RenderLambdaEscape::Escape:
-                        doEscape = true;
+                    case render_lambda_escape::escape:
+                        do_escape = true;
                         break;
-                    case RenderLambdaEscape::Unescape:
-                        doEscape = false;
+                    case render_lambda_escape::unescape:
+                        do_escape = false;
                         break;
-                    case RenderLambdaEscape::Optional:
-                        doEscape = escaped;
+                    case render_lambda_escape::optional:
+                        do_escape = escaped;
                         break;
                 }
-                return doEscape ? escape_(str) : str;
+                return do_escape ? escape_(str) : str;
             };
-            if (parseWithSameContext) {
+            if (parse_with_same_context) {
                 basic_mustache tmpl{text, ctx};
                 tmpl.set_custom_escape(escape_);
-                return processTemplate(tmpl);
+                return process_template(tmpl);
             }
             basic_mustache tmpl{text};
             tmpl.set_custom_escape(escape_);
-            return processTemplate(tmpl);
+            return process_template(tmpl);
         };
         const typename basic_renderer<string_type>::type1 render = [&render2](const string_type& text) {
             return render2(text, false);
@@ -15780,46 +16342,46 @@ private:
         } else {
             handler(render(var->lambda_value()(text)));
         }
-        return errorMessage_.empty();
+        return error_message_.empty();
     }
     
-    bool renderVariable(const RenderHandler& handler, const basic_data<string_type>* var, context_internal& ctx, bool escaped) {
+    bool render_variable(const render_handler& handler, const basic_data<string_type>* var, context_internal<string_type>& ctx, bool escaped) {
         if (var->is_string()) {
             const auto varstr = var->string_value();
             handler(escaped ? escape_(varstr) : varstr);
         } else if (var->is_lambda()) {
-            const RenderLambdaEscape escapeOpt = escaped ? RenderLambdaEscape::Escape : RenderLambdaEscape::Unescape;
-            return renderLambda(handler, var, ctx, escapeOpt, {}, false);
+            const render_lambda_escape escape_opt = escaped ? render_lambda_escape::escape : render_lambda_escape::unescape;
+            return render_lambda(handler, var, ctx, escape_opt, {}, false);
         } else if (var->is_lambda2()) {
             using streamstring = std::basic_ostringstream<typename string_type::value_type>;
             streamstring ss;
             ss << "Lambda with render argument is not allowed for regular variables";
-            errorMessage_ = ss.str();
+            error_message_ = ss.str();
             return false;
         }
         return true;
     }
 
-    void renderSection(const RenderHandler& handler, context_internal& ctx, component& incomp, const basic_data<string_type>* var) {
-        const auto callback = [&handler, &ctx, this](component& comp) -> WalkControl {
-            return renderComponent(handler, ctx, comp);
+    void render_section(const render_handler& handler, context_internal<string_type>& ctx, component<string_type>& incomp, const basic_data<string_type>* var) {
+        const auto callback = [&handler, &ctx, this](component<string_type>& comp) -> typename component<string_type>::walk_control {
+            return render_component(handler, ctx, comp);
         };
         if (var && var->is_non_empty_list()) {
             for (const auto& item : var->list_value()) {
-                const context_pusher ctxpusher{ctx, &item};
-                walkChildren(callback, incomp);
+                const context_pusher<string_type> ctxpusher{ctx, &item};
+                incomp.walk_children(callback);
             }
         } else if (var) {
-            const context_pusher ctxpusher{ctx, var};
-            walkChildren(callback, incomp);
+            const context_pusher<string_type> ctxpusher{ctx, var};
+            incomp.walk_children(callback);
         } else {
-            walkChildren(callback, incomp);
+            incomp.walk_children(callback);
         }
     }
 
 private:
-    string_type errorMessage_;
-    component rootComponent_;
+    string_type error_message_;
+    component<string_type> root_component_;
     escape_handler escape_;
 };
 
@@ -15843,18 +16405,9 @@ using dataw = basic_data<mustachew::string_type>;
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_METAMESSAGETOCPPTRANSFORMATOR_HPP
@@ -15904,18 +16457,9 @@ class LIBCLUON_API MetaMessageToCPPTransformator {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_METAMESSAGETOPROTOTRANSFORMATOR_HPP
@@ -15965,18 +16509,9 @@ class LIBCLUON_API MetaMessageToProtoTransformator {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 //#include "cluon/MetaMessageToCPPTransformator.hpp"
@@ -16132,6 +16667,20 @@ class LIB_API {{%MESSAGE%}} {
 
     public:
         template<class Visitor>
+        inline void accept(uint32_t fieldId, Visitor &visitor) {
+            (void)fieldId;
+            (void)visitor;
+//            visitor.preVisit(ID(), ShortName(), LongName());
+            {{#%FIELDS%}}
+            if ({{%FIELDIDENTIFIER%}} == fieldId) {
+                doVisit({{%FIELDIDENTIFIER%}}, std::move("{{%TYPE%}}"s), std::move("{{%NAME%}}"s), m_{{%NAME%}}, visitor);
+                return;
+            }
+            {{/%FIELDS%}}
+//            visitor.postVisit();
+        }
+
+        template<class Visitor>
         inline void accept(Visitor &visitor) {
             visitor.preVisit(ID(), ShortName(), LongName());
             {{#%FIELDS%}}
@@ -16283,18 +16832,9 @@ void MetaMessageToCPPTransformator::visit(const MetaMessage &mm) noexcept {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 //#include "cluon/MetaMessageToProtoTransformator.hpp"
@@ -16410,18 +16950,9 @@ void MetaMessageToProtoTransformator::visit(const MetaMessage &mm) noexcept {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_MSC_HPP
@@ -16511,18 +17042,9 @@ inline int32_t cluon_msc(int32_t argc, char **argv) {
 /*
  * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 // This test for a compiler definition is necessary to preserve single-file, header-only compability.
@@ -16538,20 +17060,11 @@ int32_t main(int32_t argc, char **argv) {
 #endif
 #ifdef HAVE_CLUON_REPLAY
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_REPLAY_HPP
@@ -16779,20 +17292,11 @@ inline int32_t cluon_replay(int32_t argc, char **argv) {
 #endif
 
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 // This test for a compiler definition is necessary to preserve single-file, header-only compability.
@@ -16808,20 +17312,11 @@ int32_t main(int32_t argc, char **argv) {
 #endif
 #ifdef HAVE_CLUON_LIVEFEED
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_LIVEFEED_HPP
@@ -16957,20 +17452,11 @@ inline int32_t cluon_livefeed(int32_t argc, char **argv) {
 #endif
 
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 // This test for a compiler definition is necessary to preserve single-file, header-only compability.
@@ -16986,20 +17472,11 @@ int32_t main(int32_t argc, char **argv) {
 #endif
 #ifdef HAVE_CLUON_REC2CSV
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #ifndef CLUON_REC2CSV_HPP
@@ -17150,20 +17627,11 @@ inline int32_t cluon_rec2csv(int32_t argc, char **argv) {
 
 #endif
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2017-2018  Christian Berger
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 // This test for a compiler definition is necessary to preserve single-file, header-only compability.

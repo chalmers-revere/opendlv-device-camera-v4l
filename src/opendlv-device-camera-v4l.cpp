@@ -233,8 +233,8 @@ int32_t main(int32_t argc, char **argv) {
                 struct timespec upTime{};
                 clock_gettime(CLOCK_MONOTONIC, &upTime);
 
-                int64_t uptimeIn_ms = upTime.tv_sec * 1000 + static_cast<int64_t>(round(upTime.tv_nsec/ 1000.0f*1000.0f));
-                int64_t epochTimeIn_ms =  epochTime.tv_sec * 1000  + static_cast<int64_t>(round(epochTime.tv_usec/1000.0f));
+                int64_t uptimeIn_ms = upTime.tv_sec * 1000 + static_cast<int64_t>(round(upTime.tv_nsec/(1000.0f*1000.0f)));
+                int64_t epochTimeIn_ms =  epochTime.tv_sec * 1000 + static_cast<int64_t>(round(epochTime.tv_usec/1000.0f));
                 uptimeToEpochOffsetIn_ms = epochTimeIn_ms - uptimeIn_ms;
             }
 
@@ -291,6 +291,7 @@ int32_t main(int32_t argc, char **argv) {
                     if (0 < bufferSize) {
                         // Transform data as I420 in sharedMemoryI420.
                         sharedMemoryI420->lock();
+                        sharedMemoryI420->setTimeStamp(ts);
                         {
                             if (isMJPEG) {
                                 libyuv::MJPGToI420(bufferStart, bufferSize,
@@ -311,6 +312,7 @@ int32_t main(int32_t argc, char **argv) {
                         sharedMemoryI420->unlock();
 
                         sharedMemoryARGB->lock();
+                        sharedMemoryARGB->setTimeStamp(ts);
                         {
                             libyuv::I420ToARGB(reinterpret_cast<uint8_t*>(sharedMemoryI420->data()), WIDTH,
                                                reinterpret_cast<uint8_t*>(sharedMemoryI420->data()+(WIDTH * HEIGHT)), WIDTH/2,
@@ -319,6 +321,7 @@ int32_t main(int32_t argc, char **argv) {
 
                             if (VERBOSE) {
                                 XPutImage(display, window, DefaultGC(display, 0), ximage, 0, 0, 0, 0, WIDTH, HEIGHT);
+                                std::clog << "[opendlv-device-camera-v4l]: Acquired new frame from capture device: " << commandlineArguments["camera"] << " at " << cluon::time::toMicroseconds(ts) << " microseconds." << std::endl;
                             }
                         }
                         sharedMemoryARGB->unlock();
