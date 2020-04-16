@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018  Christian Berger
+ * Copyright (C) 2018-2020  Christian Berger
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -127,6 +127,7 @@ int32_t main(int32_t argc, char **argv) {
 
         bool isMJPEG{false};
         bool isYUYV422{false};
+        bool isYU12{false};
         if (v4l2_fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_MJPEG) {
             std::clog << "[opendlv-device-camera-v4l]: Capture device: " << commandlineArguments["camera"] << " provides MJPEG stream." << std::endl;
             isMJPEG = true;
@@ -134,6 +135,10 @@ int32_t main(int32_t argc, char **argv) {
         if (v4l2_fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_YUYV) {
             std::clog << "[opendlv-device-camera-v4l]: Capture device: " << commandlineArguments["camera"] << " provides YUYV 4:2:2 stream." << std::endl;
             isYUYV422 = true;
+        }
+        if (v4l2_fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_YUV420) {
+            std::clog << "[opendlv-device-camera-v4l]: Capture device: " << commandlineArguments["camera"] << " provides YUV 4:2:0 stream." << std::endl;
+            isYU12 = true;
         }
 
         struct v4l2_streamparm v4l2_stream_parm;
@@ -307,6 +312,15 @@ int32_t main(int32_t argc, char **argv) {
                                                    reinterpret_cast<uint8_t*>(sharedMemoryI420->data()+(WIDTH * HEIGHT)), WIDTH/2,
                                                    reinterpret_cast<uint8_t*>(sharedMemoryI420->data()+(WIDTH * HEIGHT + ((WIDTH * HEIGHT) >> 2))), WIDTH/2,
                                                    WIDTH, HEIGHT);
+                            }
+                            if (isYU12) {
+                                libyuv::I420Copy(reinterpret_cast<uint8_t*>(bufferStart), WIDTH,
+                                                 reinterpret_cast<uint8_t*>(bufferStart+(WIDTH * HEIGHT)), WIDTH/2,
+                                                 reinterpret_cast<uint8_t*>(bufferStart+(WIDTH * HEIGHT + ((WIDTH * HEIGHT) >> 2))), WIDTH/2,
+                                                 reinterpret_cast<uint8_t*>(sharedMemoryI420->data()), WIDTH,
+                                                 reinterpret_cast<uint8_t*>(sharedMemoryI420->data()+(WIDTH * HEIGHT)), WIDTH/2,
+                                                 reinterpret_cast<uint8_t*>(sharedMemoryI420->data()+(WIDTH * HEIGHT + ((WIDTH * HEIGHT) >> 2))), WIDTH/2,
+                                                 WIDTH, HEIGHT);
                             }
                         }
                         sharedMemoryI420->unlock();

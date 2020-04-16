@@ -19,7 +19,7 @@ project(opendlv-device-camera-v4l)
 
 ################################################################################
 # Defining the relevant version of libcluon.
-set(CLUON_COMPLETE cluon-complete-v0.0.117.hpp)
+set(CLUON_COMPLETE cluon-complete-v0.0.127.hpp)
 
 ################################################################################
 # Set the search path for .cmake files.
