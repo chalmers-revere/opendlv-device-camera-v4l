@@ -55,6 +55,7 @@ int32_t main(int32_t argc, char **argv) {
         std::cerr << "         --width:     desired width of a frame" << std::endl;
         std::cerr << "         --height:    desired height of a frame" << std::endl;
         std::cerr << "         --freq:      desired frame rate" << std::endl;
+        std::cerr << "         --yu12:      request YU12 (YUV420/I420) pixel format" << std::endl;
         std::cerr << "         --verbose:   display captured image" << std::endl;
         std::cerr << "Example: " << argv[0] << " --camera=/dev/video0 --width=640 --height=480 --freq=20 --verbose" << std::endl;
         retCode = 1;
@@ -63,6 +64,7 @@ int32_t main(int32_t argc, char **argv) {
         const uint32_t WIDTH{static_cast<uint32_t>(std::stoi(commandlineArguments["width"]))};
         const uint32_t HEIGHT{static_cast<uint32_t>(std::stoi(commandlineArguments["height"]))};
         const bool VERBOSE{commandlineArguments.count("verbose") != 0};
+        const bool YU12{commandlineArguments.count("yu12") != 0};
 
         const float FREQ{static_cast<float>(std::stof(commandlineArguments["freq"]))};
         if ( !(FREQ > 0) ) {
@@ -111,7 +113,12 @@ int32_t main(int32_t argc, char **argv) {
         v4l2_fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         v4l2_fmt.fmt.pix.width = WIDTH;
         v4l2_fmt.fmt.pix.height = HEIGHT;
-        v4l2_fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_MJPEG;
+        if (YU12) {
+            v4l2_fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUV420;
+        }
+        else {
+            v4l2_fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_MJPEG;
+        }
         v4l2_fmt.fmt.pix.field = V4L2_FIELD_ANY;
 
         if (0 > ::ioctl(videoDevice, VIDIOC_S_FMT, &v4l2_fmt)) {
