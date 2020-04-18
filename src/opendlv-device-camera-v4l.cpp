@@ -135,6 +135,7 @@ int32_t main(int32_t argc, char **argv) {
         bool isMJPEG{false};
         bool isYUYV422{false};
         bool isYU12{false};
+        uint32_t numberOfBuffers{32};
         if (v4l2_fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_MJPEG) {
             std::clog << "[opendlv-device-camera-v4l]: Capture device: " << commandlineArguments["camera"] << " provides MJPEG stream." << std::endl;
             isMJPEG = true;
@@ -146,6 +147,7 @@ int32_t main(int32_t argc, char **argv) {
         if (v4l2_fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_YUV420) {
             std::clog << "[opendlv-device-camera-v4l]: Capture device: " << commandlineArguments["camera"] << " provides YUV 4:2:0 stream." << std::endl;
             isYU12 = true;
+            numberOfBuffers = 17;
         }
 
         struct v4l2_streamparm v4l2_stream_parm;
@@ -162,7 +164,7 @@ int32_t main(int32_t argc, char **argv) {
             return retCode = 1;
         }
 
-        const uint32_t BUFFER_COUNT{32};
+        const uint32_t BUFFER_COUNT{numberOfBuffers};
 
         struct v4l2_requestbuffers v4l2_req_bufs;
         ::memset(&v4l2_req_bufs, 0, sizeof(struct v4l2_requestbuffers));
