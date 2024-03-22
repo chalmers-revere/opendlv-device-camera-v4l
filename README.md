@@ -1,3 +1,5 @@
+Moved to https://git.opendlv.org.
+
 ## OpenDLV Microservice to interface with Video4Linux-supported cameras
 
 This repository provides source code to interface Video4Linux-supported cameras
